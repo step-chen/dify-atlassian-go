@@ -9,20 +9,11 @@ import (
 
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
+	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
-// saveDocumentMapping saves the mapping between Confluence content and Dify document
-func saveDocumentMapping(contentID, spaceKey, difyDocumentID, url, title, datasetID string, timestamp string) error {
-	err := db.SaveMapping(contentID, spaceKey, difyDocumentID, url, title, datasetID, timestamp)
-	if err != nil {
-		log.Printf("Failed to save mapping for content %s: %v", title, err)
-		return err
-	}
-	return nil
-}
-
 // processSpaceOperations processes all operations for a given space using worker queues
-func processSpaceOperations(spaceKey string, client *dify.Client, confluenceClient *confluence.Client, jobChan *JobChannels) error {
+func processSpace(spaceKey string, client *dify.Client, confluenceClient *confluence.Client, jobChan *JobChannels, docMetas map[string]dify.DocumentInfo) error {
 	// Get space contents
 	contents, err := confluenceClient.GetSpaceContentsList(spaceKey)
 	if err != nil {
@@ -30,7 +21,7 @@ func processSpaceOperations(spaceKey string, client *dify.Client, confluenceClie
 	}
 
 	// Initialize operations based on existing mappings
-	if err := db.InitOperationByMapping(spaceKey, client.DatasetID(), contents); err != nil {
+	if err := initOperations(client, contents, docMetas); err != nil {
 		return fmt.Errorf("error initializing operations for space %s: %w", spaceKey, err)
 	}
 
@@ -41,6 +32,41 @@ func processSpaceOperations(spaceKey string, client *dify.Client, confluenceClie
 		}
 	}
 
+	return nil
+}
+
+func initOperations(client *dify.Client, contents map[string]confluence.ContentOperation, docMetas map[string]dify.DocumentInfo) error {
+	for contentID, doc := range docMetas {
+		if op, ok := contents[contentID]; !ok {
+			// Add new operation for unmapped content
+			contents[contentID] = confluence.ContentOperation{
+				Action:    2, // Delete
+				DifyID:    doc.DifyID,
+				DatasetID: client.DatasetID(),
+			}
+		} else {
+			// Update existing operation
+			op.DifyID = doc.DifyID
+			op.DatasetID = client.DatasetID()
+
+			// Compare times using utility function
+			equal, err := utils.CompareRFC3339Times(op.LastModifiedDate, doc.When)
+			if err != nil {
+				return fmt.Errorf("failed to compare times: %w", err)
+			}
+
+			// Determine action based on time comparison
+			if !equal {
+				op.Action = 2 // Update if times differ
+			} else {
+				// Delete the operation since no action is needed
+				delete(contents, contentID)
+				continue
+			}
+
+			contents[contentID] = op
+		}
+	}
 	return nil
 }
 
@@ -135,16 +161,14 @@ func createDocument(j *jobContent) error {
 		return err
 	}
 
+	j.op.DifyID = resp.Document.ID
+	j.op.DatasetID = j.client.DatasetID()
+
 	// Update document metadata
 	if err := updateDocumentMetadata(ctx, j.client, resp.Document.ID, j.content.URL, "page", j.spaceKey, j.content.Title, j.content.ID, j.content.PublishDate, ""); err != nil {
 		if errDel := j.client.DeleteDocument(ctx, resp.Document.ID); errDel != nil {
 			log.Printf("failed to delete Dify document %s: %v", resp.Document.ID, errDel)
 		}
-		return err
-	}
-
-	// Save mapping between Confluence and Dify
-	if err := saveDocumentMapping(j.content.ID, j.spaceKey, resp.Document.ID, j.content.URL, j.content.Title, j.client.DatasetID(), j.content.PublishDate); err != nil {
 		return err
 	}
 
@@ -177,11 +201,6 @@ func updateDocument(j *jobContent) error {
 
 	// Update document metadata
 	if err := updateDocumentMetadata(ctx, j.client, resp.Document.ID, j.content.URL, "page", j.spaceKey, j.content.Title, j.content.ID, j.content.PublishDate, ""); err != nil {
-		return err
-	}
-
-	// Save mapping between Confluence and Dify
-	if err := saveDocumentMapping(j.content.ID, j.spaceKey, resp.Document.ID, j.content.URL, j.content.Title, j.client.DatasetID(), j.content.PublishDate); err != nil {
 		return err
 	}
 
@@ -226,18 +245,15 @@ func uploadDocumentByFile(j *jobAttachment) error {
 
 	// Check media type and use appropriate upload method
 	docResp, err = j.client.CreateDocumentByFile(ctx, filePath, req, showPath)
-
 	if err != nil {
 		return fmt.Errorf("failed to upload attachment for space %s attachment %s: %v", j.spaceKey, j.attachment.Title, err)
 	}
 
+	j.op.DifyID = docResp.Document.ID
+	j.op.DatasetID = j.client.DatasetID()
+
 	// Update document metadata
 	if err := updateDocumentMetadata(ctx, j.client, docResp.Document.ID, j.attachment.Download, "attachment", j.spaceKey, j.attachment.Title, j.attachment.ID, j.attachment.LastModifiedDate, j.attachment.Download); err != nil {
-		return err
-	}
-
-	// Save mapping between Confluence attachment and Dify document
-	if err := saveDocumentMapping(j.attachment.ID, j.spaceKey, docResp.Document.ID, j.attachment.Download, j.attachment.Title, j.client.DatasetID(), j.attachment.LastModifiedDate); err != nil {
 		return err
 	}
 
@@ -307,13 +323,6 @@ func deleteDocument(j *jobDelete) error {
 	err := j.client.DeleteDocument(ctx, j.documentID)
 	if err != nil {
 		log.Printf("Failed to delete Dify document %s: %v", j.documentID, err)
-		return err
-	}
-
-	// Remove mapping
-	err = db.DeleteMapping(j.documentID)
-	if err != nil {
-		log.Printf("Failed to delete mapping for document %s: %v", j.documentID, err)
 		return err
 	}
 

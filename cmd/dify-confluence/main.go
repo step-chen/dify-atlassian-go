@@ -10,13 +10,11 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/concurrency"
 	"github.com/step-chen/dify-atlassian-go/internal/config"
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
-	"github.com/step-chen/dify-atlassian-go/internal/database"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
 var (
-	db              *database.Database
 	difyClients     map[string]*dify.Client
 	batchPool       *concurrency.BatchPool
 	timeoutContents map[string]map[string]confluence.ContentOperation // Stores IDs of timeout documents and their space keys
@@ -50,12 +48,6 @@ func main() {
 	// Check required docker images
 	utils.InitRequiredTools()
 
-	// Initialize database connection
-	db, err = database.InitDB()
-	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
-	}
-
 	// Initialize timeoutContents map
 	timeoutContents = make(map[string]map[string]confluence.ContentOperation)
 
@@ -86,13 +78,6 @@ func main() {
 		log.Fatalf("Failed to create Confluence client: %v", err)
 	}
 
-	// Clean up invalid mapping records for each space
-	for spaceKey, client := range difyClients {
-		if err := cleanupSpaceMappings(spaceKey, client); err != nil {
-			log.Printf("Error cleaning up mappings for space %s: %v", spaceKey, err)
-		}
-	}
-
 	// Create worker pools with configured queue sizes
 	jobChannels := JobChannels{
 		Content:    make(chan jobContent, cfg.Concurrency.QueueSize),
@@ -121,9 +106,17 @@ func main() {
 
 	// Process all configured space keys
 	for _, spaceKey := range cfg.Confluence.SpaceKeys {
-		if err := processSpaceOperations(spaceKey, difyClients[spaceKey], confluenceClient, &jobChannels); err != nil {
+		c := difyClients[spaceKey]
+		docMetas, err := c.FetchDocumentsList(0, 100)
+		if err != nil {
+			log.Printf("Failed to list documents for space %s (dataset: %s): %v", spaceKey, c.DatasetID(), err)
+		}
+		if err := processSpace(spaceKey, c, confluenceClient, &jobChannels, docMetas); err != nil {
 			log.Printf("Error processing space %s: %v", spaceKey, err)
 		}
+		/*if err := processSpaceOperations(spaceKey, c, confluenceClient, &jobChannels); err != nil {
+			log.Printf("Error processing space %s: %v", spaceKey, err)
+		}*/
 	}
 
 	wg.Wait()
@@ -168,36 +161,6 @@ func main() {
 	}
 }
 
-// cleanupSpaceMappings cleans up invalid mapping records for a given space
-// Parameters:
-//   - spaceKey: The space key to cleanup mappings for
-//   - client: The Dify client for the space
-//
-// Returns:
-//   - error: Any error that occurred during the cleanup process
-func cleanupSpaceMappings(spaceKey string, client *dify.Client) error {
-	// Add context timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Get all documents in dataset
-	docList, err := client.ListDocuments(ctx, 0, 100)
-	if err != nil {
-		return fmt.Errorf("failed to list documents for space %s (dataset: %s): %w",
-			spaceKey, client.DatasetID(), err)
-	}
-
-	// Use returned map[string]bool directly for cleanup
-	if err := db.CleanupMappings(client.DatasetID(), docList); err != nil {
-		return fmt.Errorf("failed to cleanup mappings for space %s (dataset: %s): %w",
-			spaceKey, client.DatasetID(), err)
-	}
-
-	log.Printf("Successfully cleaned up mappings for space %s (dataset: %s)",
-		spaceKey, client.DatasetID())
-	return nil
-}
-
 // processTimeoutContents processes all timeout documents by sending them to processContentOperation
 func processTimeoutContents(confluenceClient *confluence.Client, jobChan *JobChannels) error {
 	// Create a copy of space keys to safely iterate
@@ -238,7 +201,7 @@ func processTimeoutContents(confluenceClient *confluence.Client, jobChan *JobCha
 
 // statusChecker checks the status of a batch using Dify client
 func statusChecker(spaceKey, confluenceID, batchID string, op confluence.ContentOperation) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	client, exists := difyClients[spaceKey]
@@ -262,10 +225,7 @@ func statusChecker(spaceKey, confluenceID, batchID string, op confluence.Content
 			if err != nil {
 				return "", fmt.Errorf("failed to delete document: %w", err)
 			}
-			// Delete mapping from database
-			if err := db.DeleteMapping(status.Data[0].ID); err != nil {
-				return "", fmt.Errorf("failed to delete mapping: %w", err)
-			}
+
 			// Store and log the ID
 			if op.Action == 1 {
 				op.Action = 0

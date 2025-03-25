@@ -168,7 +168,13 @@ type UpdateDocumentRequest struct {
 // DocumentListResponse defines the response structure for retrieving document list
 type DocumentListResponse struct {
 	Data []struct {
-		ID string `json:"id"`
+		ID          string `json:"id"`
+		DocMetadata []struct {
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"doc_metadata"`
 	} `json:"data"`
 	Total   int  `json:"total"`
 	HasMore bool `json:"has_more"`

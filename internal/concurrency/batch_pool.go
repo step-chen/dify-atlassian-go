@@ -1,6 +1,7 @@
 package concurrency
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -43,8 +44,12 @@ func (bp *BatchPool) monitorBatch(spaceKey, confluenceID, batchID string, op con
 
 	for range ticker.C {
 		status, err := bp.statusChecker(spaceKey, confluenceID, batchID, op)
-		if err != nil || status == "completed" {
+		if status == "completed" {
 			bp.remove(batchID)
+			return
+		}
+		if err != nil {
+			log.Printf("Failed to check status of batch %s: %v", batchID, err)
 			return
 		}
 	}

@@ -3,7 +3,6 @@ module github.com/step-chen/dify-atlassian-go
 go 1.24.1
 
 require (
-	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/microcosm-cc/bluemonday v1.0.27
 	gopkg.in/yaml.v2 v2.4.0
 )

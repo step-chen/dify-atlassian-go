@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/step-chen/dify-atlassian-go/internal/config"
 )
@@ -185,9 +186,17 @@ func (c *Client) CreateDocumentByFile(ctx context.Context, filePath string, req 
 	return &response, nil
 }
 
-// ListDocuments retrieves all documents in the dataset
-func (c *Client) ListDocuments(ctx context.Context, page, limit int) (map[string]bool, error) {
-	allDocuments := make(map[string]bool)
+// FetchDocumentsList retrieves all documents in the dataset
+type DocumentInfo struct {
+	DifyID string
+	When   string
+}
+
+func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	allDocuments := make(map[string]DocumentInfo)
 
 	if page < 0 {
 		page = 0
@@ -224,7 +233,20 @@ func (c *Client) ListDocuments(ctx context.Context, page, limit int) (map[string
 		}
 
 		for _, doc := range response.Data {
-			allDocuments[doc.ID] = true
+			var idValue, whenValue string
+			for _, meta := range doc.DocMetadata {
+				if meta.Name == "id" {
+					idValue = meta.Value
+				} else if meta.Name == "when" {
+					whenValue = meta.Value
+				}
+			}
+			if idValue != "" {
+				allDocuments[idValue] = DocumentInfo{
+					DifyID: doc.ID,
+					When:   whenValue,
+				}
+			}
 		}
 
 		if !response.HasMore {
