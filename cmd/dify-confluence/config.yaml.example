@@ -31,11 +31,12 @@ dify:
   api_key: your-dify-api-key
   # Mapping of space keys to dataset IDs
   datasets:
-    YOUR_SPACE_KEY: your-dataset-id
+    YOUR_SPACE_KEY_1: your-dataset-id_1
+    YOUR_SPACE_KEY_2: your-dataset-id_2
   rag_setting:
     # Document indexing technique (high_quality, economy)
     indexing_technique: high_quality
-    # Document form (hierarchical_model, flat_model)  
+    # Document form (hierarchical_model, qa_model, text_model)  
     doc_form: hierarchical_model
     # Process rules configuration
     process_rule:
