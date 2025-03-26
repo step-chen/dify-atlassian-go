@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 )
@@ -36,7 +37,7 @@ func CheckImageExists(imageName string) error {
 // PullImage pulls a docker image if it doesn't exist
 func PullImage(imageName string) error {
 	cmd := exec.Command("docker", "pull", imageName)
-	fmt.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
+	log.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
 	return cmd.Run()
 }
 
@@ -49,7 +50,7 @@ func InitRequiredTools() {
 func checkPandoc() {
 	// Check if pandoc command exists
 	if _, err := exec.LookPath("pandoc"); err != nil {
-		fmt.Println("pandoc command not found:", err)
+		log.Println("pandoc command not found:", err)
 		return
 	}
 
@@ -57,13 +58,13 @@ func checkPandoc() {
 	cmd := exec.Command("pandoc", "--version")
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Println("failed to get pandoc version:", err)
+		log.Println("failed to get pandoc version:", err)
 		return
 	}
 
 	// Print supported pandoc version
-	fmt.Println("Supported pandoc version:")
-	fmt.Println(string(output))
+	// log.Println("Supported pandoc version:")
+	log.Println("support", strings.Split(string(output), "\n")[0])
 	dockerUtils.pandocImage = true
 }
 
@@ -73,28 +74,28 @@ func checkMarkitdownImage() {
 	}
 
 	if err := CheckImageExists(MarkitdownImage); err != nil {
-		fmt.Println("failed to check markitdown image:", err)
-		fmt.Println("build markitdown:latest image...")
+		log.Println("failed to check markitdown image:", err)
+		log.Println("build markitdown:latest image...")
 		cmd := exec.Command("git", "clone", "--branch", "main", MarkitdownRepoURL, MarkitdownRepo)
-		fmt.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
+		log.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
 
 		if err := cmd.Run(); err == nil {
-			fmt.Println("successful to clone markitdown repository")
+			log.Println("successful to clone markitdown repository")
 
 			cmd = exec.Command("docker", "build", "-t", MarkitdownImage, MarkitdownRepo)
-			fmt.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
+			log.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
 
 			if err = cmd.Run(); err == nil {
-				fmt.Println("successful to build markitdown:latest image")
+				log.Println("successful to build markitdown:latest image")
 				dockerUtils.markitdownImage = true
 			} else {
-				fmt.Println("failed to build markitdown:latest image:", err)
+				log.Println("failed to build markitdown:latest image:", err)
 			}
 		} else {
-			fmt.Println("failed to clone markitdown repository:", err)
+			log.Println("failed to clone markitdown repository:", err)
 		}
 	} else {
-		fmt.Println("successful to check markitdown:latest image")
+		log.Println("successful to check markitdown:latest image")
 		dockerUtils.markitdownImage = true
 	}
 }

@@ -1,63 +1,59 @@
 # Confluence configuration
 confluence:
   # Base URL of the Confluence instance
-  base_url: https://confluence.cms.navinfo.cloud
+  base_url: https://your-confluence-instance.com
   # API key for Confluence authentication
-  api_key: "your-confluence-api-key"
+  api_key: your-confluence-api-key
   # List of space keys to process
   space_keys:
-    - HAD
+    - YOUR_SPACE_KEY
 
 # Concurrency configuration
 concurrency:
   # Whether concurrency is enabled
-  enabled: false
+  enabled: true
   # Number of concurrent content workers
-  workers: 3
+  workers: 5
   # Size of the content processing queue
-  queue_size: 3
-  # Number of concurrent attachment workers
-  attachment_workers: 3
-  # Size of the attachment processing queue
-  attachment_queue_size: 3
-  # Number of concurrent delete workers
-  delete_workers: 3
-  # Size of the delete processing queue
-  delete_queue_size: 3
+  queue_size: 5
   # Maximum number of batches in the global pool
   batch_pool_size: 10
   # Timeout for document indexing (in minutes)
-  indexing_timeout: 2
+  indexing_timeout: 5
   # Maximum number of retries for timeout documents
   max_retries: 10
 
 # Dify configuration
 dify:
   # Base URL of the Dify API
-  base_url: http://192.168.30.82:5210/v1
+  base_url: http://your-dify-instance.com/v1
   # API key for Dify authentication
-  api_key: "your-dify-api-key"
+  api_key: your-dify-api-key
   # Mapping of space keys to dataset IDs
   datasets:
-    HAD: "your-dataset-id"
-
-# Process rules configuration
-process_rule:
-  mode: custom
-  rules:
-    pre_processing_rules:
-      - id: remove_extra_spaces
-        enabled: true
-      - id: remove_urls_emails
-        enabled: false
-    segmentation:
-      separator: "\n"
-      max_tokens: 2000
-    parent_mode: full-doc
-    subchunk_segmentation:
-      separator: "***"
-      max_tokens: 500
-      chunk_overlap: 150
+    YOUR_SPACE_KEY: your-dataset-id
+  rag_setting:
+    # Document indexing technique (high_quality, economy)
+    indexing_technique: high_quality
+    # Document form (hierarchical_model, flat_model)  
+    doc_form: hierarchical_model
+    # Process rules configuration
+    process_rule:
+      mode: custom
+      rules:
+        pre_processing_rules:
+          - id: remove_extra_spaces
+            enabled: true
+          - id: remove_urls_emails
+            enabled: false
+        segmentation:
+          separator: "\n"
+          max_tokens: 500
+        parent_mode: paragraph
+        subchunk_segmentation:
+          separator: "***"
+          max_tokens: 500
+          chunk_overlap: 150
 
 # Allowed media types for attachments
 allowed_types:
@@ -70,8 +66,6 @@ allowed_types:
   application/vnd.ms-excel: true
   application/vnd.openxmlformats-officedocument.wordprocessingml.document: true
   text/csv: true
-  #application/vnd.oasis.opendocument.text: true
-  #application/vnd.oasis.opendocument.spreadsheet: true
 
 # Unsupported media types that will be skipped during processing
 unsupported_types:
@@ -96,3 +90,9 @@ unsupported_types:
   application/xml: true
   image/svg+xml: true
   application/vnd.jgraph.mxfile: true
+  video/quicktime: true
+  video/mp4: true
+  video/webm: true
+  video/x-msvideo: true
+  audio/mpeg: true
+  audio/wav: true

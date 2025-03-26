@@ -59,15 +59,15 @@ func main() {
 	for _, spaceKey := range cfg.Confluence.SpaceKeys {
 		datasetID, exists := cfg.Dify.Datasets[spaceKey]
 		if !exists {
-			log.Fatalf("No dataset_id configured for space key: %s", spaceKey)
+			log.Fatalf("no dataset_id configured for space key: %s", spaceKey)
 		}
 
 		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
 		if err != nil {
-			log.Fatalf("Failed to create Dify client for space %s: %v", spaceKey, err)
+			log.Fatalf("failed to create Dify client for space %s: %v", spaceKey, err)
 		}
 		if err = client.InitMetadata(); err != nil {
-			log.Fatalf("Failed to initialize metadata for space %s: %v", spaceKey, err)
+			log.Fatalf("failed to initialize metadata for space %s: %v", spaceKey, err)
 		}
 		difyClients[spaceKey] = client
 	}
@@ -75,33 +75,19 @@ func main() {
 	// Initialize Confluence client
 	confluenceClient, err := confluence.NewClient(cfg.Confluence.BaseURL, cfg.Confluence.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes)
 	if err != nil {
-		log.Fatalf("Failed to create Confluence client: %v", err)
+		log.Fatalf("failed to create Confluence client: %v", err)
 	}
 
-	// Create worker pools with configured queue sizes
+	// Create worker pool with configured queue size
 	jobChannels := JobChannels{
-		Content:    make(chan jobContent, cfg.Concurrency.QueueSize),
-		Attachment: make(chan jobAttachment, cfg.Concurrency.AttachmentQueueSize),
-		Delete:     make(chan jobDelete, cfg.Concurrency.DeleteQueueSize),
+		Jobs: make(chan Job, cfg.Concurrency.QueueSize),
 	}
 	var wg sync.WaitGroup
 
-	// Start configured number of workers for content processing
+	// Start configured number of workers
 	for i := 0; i < cfg.Concurrency.Workers; i++ {
 		wg.Add(1)
-		go workerContent(jobChannels.Content, &wg)
-	}
-
-	// Start configured number of workers for attachment processing
-	for i := 0; i < cfg.Concurrency.AttachmentWorkers; i++ {
-		wg.Add(1)
-		go workerAttachment(jobChannels.Attachment, &wg)
-	}
-
-	// Start configured number of workers for delete processing
-	for i := 0; i < cfg.Concurrency.DeleteWorkers; i++ {
-		wg.Add(1)
-		go workerDelete(jobChannels.Delete, &wg)
+		go worker(jobChannels.Jobs, &wg)
 	}
 
 	// Process all configured space keys
@@ -109,10 +95,10 @@ func main() {
 		c := difyClients[spaceKey]
 		docMetas, err := c.FetchDocumentsList(0, 100)
 		if err != nil {
-			log.Printf("Failed to list documents for space %s (dataset: %s): %v", spaceKey, c.DatasetID(), err)
+			log.Printf("failed to list documents for space %s (dataset: %s): %v", spaceKey, c.DatasetID(), err)
 		}
 		if err := processSpace(spaceKey, c, confluenceClient, &jobChannels, docMetas); err != nil {
-			log.Printf("Error processing space %s: %v", spaceKey, err)
+			log.Printf("error processing space %s: %v", spaceKey, err)
 		}
 		/*if err := processSpaceOperations(spaceKey, c, confluenceClient, &jobChannels); err != nil {
 			log.Printf("Error processing space %s: %v", spaceKey, err)
@@ -124,20 +110,18 @@ func main() {
 	for retries < cfg.Concurrency.MaxRetries && len(timeoutContents) > 0 {
 		cfg.Concurrency.IndexingTimeout += cfg.Concurrency.IndexingTimeout
 		if err := processTimeoutContents(confluenceClient, &jobChannels); err != nil {
-			log.Printf("Error processing timeout documents (attempt %d/%d): %v",
+			log.Printf("error processing timeout documents (attempt %d/%d): %v",
 				retries+1, cfg.Concurrency.MaxRetries, err)
 		}
 		retries++
 		wg.Wait()
 	}
 	if len(timeoutContents) > 0 {
-		log.Printf("Failed to process all timeout documents after %d attempts",
+		log.Printf("failed to process all timeout documents after %d attempts",
 			cfg.Concurrency.MaxRetries)
 	}
 
-	close(jobChannels.Content)
-	close(jobChannels.Attachment)
-	close(jobChannels.Delete)
+	close(jobChannels.Jobs)
 	wg.Wait()
 
 	// Write failed types log
@@ -149,13 +133,13 @@ func main() {
 		for retries < cfg.Concurrency.MaxRetries && len(timeoutContents) > 0 {
 			wg.Wait() // Wait for all jobs to complete before next retry
 			if err := processTimeoutContents(confluenceClient, &jobChannels); err != nil {
-				log.Printf("Error processing timeout documents (attempt %d/%d): %v",
+				log.Printf("error processing timeout documents (attempt %d/%d): %v",
 					retries+1, cfg.Concurrency.MaxRetries, err)
 			}
 			retries++
 		}
 		if len(timeoutContents) > 0 {
-			log.Printf("Failed to process all timeout documents after %d attempts",
+			log.Printf("failed to process all timeout documents after %d attempts",
 				cfg.Concurrency.MaxRetries)
 		}
 	}
@@ -200,7 +184,7 @@ func processTimeoutContents(confluenceClient *confluence.Client, jobChan *JobCha
 }
 
 // statusChecker checks the status of a batch using Dify client
-func statusChecker(spaceKey, confluenceID, batchID string, op confluence.ContentOperation) (string, error) {
+func statusChecker(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -209,7 +193,7 @@ func statusChecker(spaceKey, confluenceID, batchID string, op confluence.Content
 		return "", fmt.Errorf("no Dify client for space %s", spaceKey)
 	}
 
-	status, err := client.GetIndexingStatus(ctx, spaceKey, batchID)
+	status, err := client.GetIndexingStatus(ctx, spaceKey, batch)
 	if err != nil {
 		return "", err
 	}
@@ -223,7 +207,7 @@ func statusChecker(spaceKey, confluenceID, batchID string, op confluence.Content
 			// Delete the document
 			err := client.DeleteDocument(ctx, status.Data[0].ID)
 			if err != nil {
-				return "", fmt.Errorf("failed to delete document: %w", err)
+				return "", fmt.Errorf("failed to delete timeout document for %s content %s: %w", spaceKey, title, err)
 			}
 
 			// Store and log the ID
@@ -234,10 +218,11 @@ func statusChecker(spaceKey, confluenceID, batchID string, op confluence.Content
 				timeoutContents[spaceKey] = make(map[string]confluence.ContentOperation)
 			}
 			timeoutContents[spaceKey][status.Data[0].ID] = op
-			log.Printf("Deleted document %s due to timeout", status.Data[0].ID)
-			return "completed", nil
+
+			return "deleted", nil
 		}
 		return status.Data[0].IndexingStatus, nil
 	}
+
 	return "", fmt.Errorf("no status data found")
 }

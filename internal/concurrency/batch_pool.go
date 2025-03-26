@@ -2,6 +2,7 @@ package concurrency
 
 import (
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,10 +14,13 @@ type BatchPool struct {
 	cond          *sync.Cond
 	batches       map[string]time.Time
 	maxSize       int
-	statusChecker func(spaceKey, confluenceID, batchID string, op confluence.ContentOperation) (string, error)
+	statusChecker func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
+	total         int
+	remain        int
+	total_len     int
 }
 
-func NewBatchPool(maxSize int, statusChecker func(spaceKey, confluenceID, batchID string, op confluence.ContentOperation) (string, error)) *BatchPool {
+func NewBatchPool(maxSize int, statusChecker func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)) *BatchPool {
 	bp := &BatchPool{
 		batches:       make(map[string]time.Time),
 		maxSize:       maxSize,
@@ -26,7 +30,7 @@ func NewBatchPool(maxSize int, statusChecker func(spaceKey, confluenceID, batchI
 	return bp
 }
 
-func (bp *BatchPool) Add(spaceKey, confluenceID, batchID string, op confluence.ContentOperation) {
+func (bp *BatchPool) Add(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
@@ -34,32 +38,37 @@ func (bp *BatchPool) Add(spaceKey, confluenceID, batchID string, op confluence.C
 		bp.cond.Wait()
 	}
 
-	bp.batches[batchID] = time.Now()
-	go bp.monitorBatch(spaceKey, confluenceID, batchID, op)
+	bp.batches[batch] = time.Now()
+	go bp.monitorBatch(spaceKey, confluenceID, title, batch, op)
 }
 
-func (bp *BatchPool) monitorBatch(spaceKey, confluenceID, batchID string, op confluence.ContentOperation) {
+func (bp *BatchPool) monitorBatch(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		status, err := bp.statusChecker(spaceKey, confluenceID, batchID, op)
+		status, err := bp.statusChecker(spaceKey, confluenceID, title, batch, op)
 		if status == "completed" {
-			bp.remove(batchID)
+			log.Printf("% *d/%d successfully indexing Dify document %s for [%s] content [%s]", bp.GetTotalLen(), bp.GetCompleted(), bp.GetTotal(), op.DifyID, spaceKey, title)
+			bp.SetRemain(bp.remain - 1)
+			bp.remove(batch)
 			return
-		}
-		if err != nil {
-			log.Printf("Failed to check status of batch %s: %v", batchID, err)
+		} else if status == "deleted" {
+			log.Printf("deleted document %s for [%s] content [%s] due to timeout", op.DifyID, spaceKey, title)
+			bp.remove(batch)
+			return
+		} else if err != nil {
+			log.Printf("failed to check status of batch %s: %v", batch, err)
 			return
 		}
 	}
 }
 
-func (bp *BatchPool) remove(batchID string) {
+func (bp *BatchPool) remove(batch string) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	delete(bp.batches, batchID)
+	delete(bp.batches, batch)
 	bp.cond.Signal()
 }
 
@@ -67,6 +76,7 @@ func (bp *BatchPool) remove(batchID string) {
 func (bp *BatchPool) WaitForAvailable() {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
+
 	for len(bp.batches) >= bp.maxSize {
 		bp.cond.Wait()
 	}
@@ -74,12 +84,41 @@ func (bp *BatchPool) WaitForAvailable() {
 
 // Size returns the current number of batches in the pool
 func (bp *BatchPool) Size() int {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
 	return len(bp.batches)
 }
 
 // MaxSize returns the maximum capacity of the batch pool
 func (bp *BatchPool) MaxSize() int {
 	return bp.maxSize
+}
+
+// SetTotal sets the total number of operations
+func (bp *BatchPool) SetTotal(total int) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	bp.total = total
+	totalStr := strconv.Itoa(bp.total)
+	bp.total_len = len(totalStr)
+}
+
+// SetRemain sets the remaining number of operations
+func (bp *BatchPool) SetRemain(remain int) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	bp.remain = remain
+}
+
+// GetTotalLen returns the length of the total operations count as a string
+func (bp *BatchPool) GetTotalLen() int {
+	return bp.total_len
+}
+
+// GetCompleted returns the completed number of operations
+func (bp *BatchPool) GetCompleted() int {
+	return bp.total - bp.remain
+}
+
+// GetTotal returns the total number of operations
+func (bp *BatchPool) GetTotal() int {
+	return bp.total
 }

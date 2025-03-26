@@ -30,50 +30,11 @@ type CreateDocumentByFileRequest struct {
 	ProcessRule        config.ProcessRule     `json:"process_rule"`                   // Document processing rules
 }
 
-/*
-// ProcessRule defines document processing rules
-
-	type ProcessRule struct {
-		Mode  string `json:"mode"`  // Cleaning, segmentation mode (e.g. "automatic", "custom")
-		Rules Rules  `json:"rules"` // Custom rules (in automatic mode, this field is empty)
-	}
-
-// ProcessRule defines document processing rules
-
-	type Rules struct {
-		PreProcessingRules   []PreprocessingRule      `json:"pre_processing_rules"` // List of preprocessing rules
-		Segmentation         SegmentationRule         `json:"segmentation"`         // Segmentation rules
-		ParentMode           string                   `json:"parent_mode"`          // e.g. "full-doc", "paragraph"
-		SubchunkSegmentation SubchunkSegmentationRule `json:"subchunk_segmentation"`
-	}
-
-// PreprocessingRule defines preprocessing rules
-
-	type PreprocessingRule struct {
-		ID      string `json:"id"`
-		Enabled bool   `json:"enabled"`
-	}
-
-// SegmentationRule defines segmentation rules
-
-	type SegmentationRule struct {
-		Separator string `json:"separator"`  // Custom segment identifier, currently only allows one delimiter to be set. Default is \n
-		MaxTokens int    `json:"max_tokens"` // Maximum length (token) defaults to 1000
-	}
-
-// SubchunkSegmentationRule defines subchunk segmentation rules
-
-	type SubchunkSegmentationRule struct {
-		Separator    string `json:"separator"`     // Segmentation identifier. Currently, only one delimiter is allowed. The default is ***
-		MaxTokens    int    `json:"max_tokens"`    //The maximum length (tokens) must be validated to be shorter than the length of the parent chunk
-		ChunkOverlap int    `json:"chunk_overlap"` //Define the overlap between adjacent chunks (optional)
-	}
-*/
 func DefaultProcessRule(cfg *config.Config) config.ProcessRule {
 	// Use config values if available, otherwise fall back to defaults
 	var processRule config.ProcessRule
-	if cfg != nil && cfg.ProcessRule != nil {
-		processRule = *cfg.ProcessRule
+	if cfg != nil && cfg.Dify.RagSetting.ProcessRule != nil {
+		processRule = *cfg.Dify.RagSetting.ProcessRule
 	}
 	if processRule.Mode == "" {
 		processRule.Mode = "custom"
@@ -94,7 +55,7 @@ func DefaultProcessRule(cfg *config.Config) config.ProcessRule {
 		processRule.Rules.Segmentation.Separator = "\n"
 	}
 	if processRule.Rules.Segmentation.MaxTokens == 0 {
-		processRule.Rules.Segmentation.MaxTokens = 2000
+		processRule.Rules.Segmentation.MaxTokens = 500
 	}
 	if processRule.Rules.ParentMode == "" {
 		processRule.Rules.ParentMode = "full-doc"

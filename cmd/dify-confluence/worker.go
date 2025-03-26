@@ -8,73 +8,58 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 )
 
+// JobType defines the type of job to be processed
+type JobType int
+
+const (
+	JobTypeContent JobType = iota
+	JobTypeAttachment
+	JobTypeDelete
+)
+
+// Job represents a unit of work for the worker
+type Job struct {
+	Type             JobType                // Type of job
+	DocumentID       string                 // Document ID
+	SpaceKey         string                 // Space key
+	Content          *confluence.Content    // Content to be processed (optional)
+	Attachment       *confluence.Attachment // Attachment to be processed (optional)
+	Client           *dify.Client           // Dify client
+	ConfluenceClient *confluence.Client     // Confluence client (optional)
+	Op               confluence.ContentOperation
+}
+
 // JobChannels contains all job channels for workers
 type JobChannels struct {
-	Content    chan jobContent
-	Attachment chan jobAttachment
-	Delete     chan jobDelete
-}
-
-// jobContent represents a unit of work for content processing
-type jobContent struct {
-	documentID string             // Document ID to be deleted
-	spaceKey   string             // Space key for this job
-	content    confluence.Content // Content to be processed
-	client     *dify.Client       // Dify client for this job
-	op         confluence.ContentOperation
-}
-
-// jobDelete represents a unit of work for document deletion
-type jobDelete struct {
-	documentID string       // Document ID to be deleted
-	client     *dify.Client // Dify client for this job
-}
-
-// jobAttachment represents a unit of work for attachment upload
-type jobAttachment struct {
-	documentID       string                // Document ID to be deleted
-	spaceKey         string                // Space key for this job
-	attachment       confluence.Attachment // Attachment to be processed
-	client           *dify.Client          // Dify client for this job
-	confluenceClient *confluence.Client    // Confluence client for downloading attachments
-	op               confluence.ContentOperation
+	Jobs chan Job
 }
 
 // worker processes jobs from the job channel
-func workerContent(jobChan <-chan jobContent, wg *sync.WaitGroup) {
+func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for j := range jobChan {
+	for job := range jobChan {
 		batchPool.WaitForAvailable()
-		if j.documentID == "" {
-			if err := createDocument(&j); err != nil {
-				log.Printf("Error processing job: %v", err)
+		switch job.Type {
+		case JobTypeContent:
+			if job.DocumentID == "" {
+				if err := createDocument(&job); err != nil {
+					log.Printf("error processing content job: %v", err)
+				}
+			} else {
+				if err := updateDocument(&job); err != nil {
+					log.Printf("error processing content job: %v", err)
+				}
 			}
-		} else {
-			if err := updateDocument(&j); err != nil {
-				log.Printf("Error processing job: %v", err)
+		case JobTypeAttachment:
+			if err := uploadDocumentByFile(&job); err != nil {
+				log.Printf("error processing attachment job: %v", err)
 			}
-		}
-	}
-}
-
-// attachmentWorker processes attachment upload jobs
-func workerAttachment(jobChan <-chan jobAttachment, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for j := range jobChan {
-		batchPool.WaitForAvailable()
-		if err := uploadDocumentByFile(&j); err != nil {
-			log.Printf("Error processing attachment job: %v", err)
-		}
-	}
-}
-
-// deleteWorker processes document deletion jobs
-func workerDelete(jobChan <-chan jobDelete, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for j := range jobChan {
-		batchPool.WaitForAvailable()
-		if err := deleteDocument(&j); err != nil {
-			log.Printf("Error processing delete job: %v", err)
+		case JobTypeDelete:
+			if err := deleteDocument(&job); err != nil {
+				log.Printf("error processing delete job: %v", err)
+			}
+		default:
+			log.Printf("unknown job type: %v", job.Type)
 		}
 	}
 }

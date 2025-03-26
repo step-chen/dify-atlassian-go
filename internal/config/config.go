@@ -20,7 +20,6 @@ type Config struct {
 	Dify             DifyConfig        `yaml:"dify"`              // Dify API configuration
 	AllowedTypes     map[string]bool   `yaml:"allowed_types"`     // Allowed media types for attachments
 	UnsupportedTypes map[string]bool   `yaml:"unsupported_types"` // Unsupported media types
-	ProcessRule      *ProcessRule      `yaml:"process_rule"`      // Document processing rules
 }
 
 // ProcessRule defines document processing rules configuration
@@ -58,23 +57,26 @@ type SubchunkSegmentationRule struct {
 
 // ConcurrencyConfig defines concurrency settings
 type ConcurrencyConfig struct {
-	Enabled             bool `yaml:"enabled"`               // Whether concurrency is enabled
-	Workers             int  `yaml:"workers"`               // Number of concurrent content workers
-	QueueSize           int  `yaml:"queue_size"`            // Size of the content processing queue
-	AttachmentWorkers   int  `yaml:"attachment_workers"`    // Number of concurrent attachment workers
-	AttachmentQueueSize int  `yaml:"attachment_queue_size"` // Size of the attachment processing queue
-	DeleteWorkers       int  `yaml:"delete_workers"`        // Number of concurrent delete workers
-	DeleteQueueSize     int  `yaml:"delete_queue_size"`     // Size of the delete processing queue
-	BatchPoolSize       int  `yaml:"batch_pool_size"`       // Maximum number of batches in the global pool
-	IndexingTimeout     int  `yaml:"indexing_timeout"`      // Timeout for document indexing (in minutes)
-	MaxRetries          int  `yaml:"max_retries"`           // Maximum number of retries for timeout documents
+	Enabled         bool `yaml:"enabled"`          // Whether concurrency is enabled
+	Workers         int  `yaml:"workers"`          // Number of concurrent workers
+	QueueSize       int  `yaml:"queue_size"`       // Size of the processing queue
+	BatchPoolSize   int  `yaml:"batch_pool_size"`  // Maximum number of batches in the global pool
+	IndexingTimeout int  `yaml:"indexing_timeout"` // Timeout for document indexing (in minutes)
+	MaxRetries      int  `yaml:"max_retries"`      // Maximum number of retries for timeout documents
 }
 
 // DifyConfig defines Dify API configuration
 type DifyConfig struct {
-	BaseURL  string            `yaml:"base_url"` // Base URL for Dify API
-	APIKey   string            `yaml:"api_key"`  // API key for authentication
-	Datasets map[string]string `yaml:"datasets"` // Mapping of space keys to dataset IDs
+	BaseURL    string            `yaml:"base_url"`    // Base URL for Dify API
+	APIKey     string            `yaml:"api_key"`     // API key for authentication
+	Datasets   map[string]string `yaml:"datasets"`    // Mapping of space keys to dataset IDs
+	RagSetting RagSetting        `yaml:"rag_setting"` // RAG settings
+}
+
+type RagSetting struct {
+	IndexingTechnique string       `yaml:"indexing_technique"` // Document indexing technique
+	DocForm           string       `yaml:"doc_form"`           // Document form
+	ProcessRule       *ProcessRule `yaml:"process_rule"`       // Document processing rules
 }
 
 // ConfluenceConfig defines Confluence API configuration
@@ -118,10 +120,6 @@ func LoadConfig(path string) (*Config, error) {
 	if !cfg.Concurrency.Enabled {
 		cfg.Concurrency.Workers = 1
 		cfg.Concurrency.QueueSize = 1
-		cfg.Concurrency.AttachmentWorkers = 1
-		cfg.Concurrency.AttachmentQueueSize = 1
-		cfg.Concurrency.DeleteWorkers = 1
-		cfg.Concurrency.DeleteQueueSize = 1
 	}
 
 	// Set default batch pool size if not specified

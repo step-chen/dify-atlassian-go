@@ -3,6 +3,7 @@ package confluence
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -253,7 +254,7 @@ func (c *Client) GetSpaceContents(spaceKey string, processContent func(content C
 					})
 				}
 				if !c.allowedTypes[att.Metadata.MediaType] {
-					fmt.Printf("Skipping attachment %s with media type %s\n", att.Title, att.Metadata.MediaType)
+					log.Printf("Skipping attachment %s with media type %s\n", att.Title, att.Metadata.MediaType)
 				}
 			}
 
