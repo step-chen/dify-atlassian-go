@@ -4,6 +4,7 @@ This tool synchronizes Confluence documents and attachments to Dify knowledge ba
 
 ## Features
 
+- **Support Dify 1.0.3 API, Confluence REST API v1**
 - Synchronize Confluence pages and attachments to Dify
 - Support for multiple Confluence spaces
 - Concurrent processing with configurable worker pool
