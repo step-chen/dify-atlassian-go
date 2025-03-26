@@ -21,30 +21,6 @@ This tool synchronizes Confluence documents and attachments to Dify knowledge ba
 ## Configuration
 
 Create a `config.yaml` file based on the example configuration:
-
-```yaml
-dify:
-  base_url: "https://your-dify-instance.com"
-  api_key: "your-api-key"
-  datasets:
-    SPACE_KEY_1: "dataset-id-1"
-    SPACE_KEY_2: "dataset-id-2"
-  rag_setting:
-    indexing_technique: "high_quality"
-    doc_form: "text"
-
-confluence:
-  base_url: "https://your-confluence-instance.com"
-  api_key: "your-confluence-api-key"
-  space_keys: ["SPACE_KEY_1", "SPACE_KEY_2"]
-
-concurrency:
-  workers: 5
-  queue_size: 100
-  batch_pool_size: 50
-  indexing_timeout: 2
-  max_retries: 3
-```
 **See cmd/dify-confluence/config.yaml.example for detail**
 
 ## Usage
