@@ -143,6 +143,9 @@ func main() {
 				cfg.Concurrency.MaxRetries)
 		}
 	}
+
+	// Log any documents that resulted in a 404 error during status check
+	batchPool.LogNotFoundErrors()
 }
 
 // processTimeoutContents processes all timeout documents by sending them to processContentOperation

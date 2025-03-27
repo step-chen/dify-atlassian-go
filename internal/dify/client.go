@@ -65,7 +65,6 @@ func (c *Client) GetIndexingStatus(ctx context.Context, spaceKey, batch string) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("unexpected status code: %d, datasetID: %s, batch: %s, url: %s", resp.StatusCode, c.datasetID, batch, url)
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 

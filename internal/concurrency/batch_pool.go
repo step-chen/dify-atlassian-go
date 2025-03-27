@@ -9,22 +9,31 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 )
 
+// NotFoundErrorInfo holds information about a document not found error
+type NotFoundErrorInfo struct {
+	SpaceKey     string
+	ConfluenceID string
+	Title        string
+}
+
 type BatchPool struct {
-	mu            sync.Mutex
-	cond          *sync.Cond
-	batches       map[string]time.Time
-	maxSize       int
-	statusChecker func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
-	total         int
-	remain        int
-	total_len     int
+	mu             sync.Mutex
+	cond           *sync.Cond
+	batches        map[string]time.Time
+	maxSize        int
+	statusChecker  func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
+	total          int
+	remain         int
+	total_len      int
+	notFoundErrors map[string]NotFoundErrorInfo // Map to store not found errors, keyed by DifyID
 }
 
 func NewBatchPool(maxSize int, statusChecker func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)) *BatchPool {
 	bp := &BatchPool{
-		batches:       make(map[string]time.Time),
-		maxSize:       maxSize,
-		statusChecker: statusChecker,
+		batches:        make(map[string]time.Time),
+		maxSize:        maxSize,
+		statusChecker:  statusChecker,
+		notFoundErrors: make(map[string]NotFoundErrorInfo), // Initialize the map
 	}
 	bp.cond = sync.NewCond(&bp.mu)
 	return bp
@@ -58,8 +67,19 @@ func (bp *BatchPool) monitorBatch(spaceKey, confluenceID, title, batch string, o
 			bp.remove(batch)
 			return
 		} else if err != nil {
+			if err.Error() == "unexpected status code: 404" {
+				log.Printf("document %s for [%s] content [%s] batch [%s] not found", op.DifyID, spaceKey, title, batch)
+				bp.recordNotFoundError(op.DifyID, spaceKey, confluenceID, title) // Record the error
+				bp.SetRemain(bp.remain - 1)
+				bp.remove(batch)
+				return
+			}
 			log.Printf("failed to check status of batch %s: %v", batch, err)
-			return
+			// Consider if other errors should also decrement remain count or be handled differently
+			// For now, just log and let the ticker retry or timeout handle it.
+			// If we return here, the batch might get stuck if the error is persistent but not a 404.
+			// Depending on desired behavior, might need bp.remove(batch) and bp.SetRemain(bp.remain - 1) here too.
+			return // Returning here to avoid potential infinite loops on persistent errors
 		}
 	}
 }
@@ -121,4 +141,32 @@ func (bp *BatchPool) GetCompleted() int {
 // GetTotal returns the total number of operations
 func (bp *BatchPool) GetTotal() int {
 	return bp.total
+}
+
+// recordNotFoundError stores the details of a 404 error
+func (bp *BatchPool) recordNotFoundError(difyID, spaceKey, confluenceID, title string) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	bp.notFoundErrors[difyID] = NotFoundErrorInfo{
+		SpaceKey:     spaceKey,
+		ConfluenceID: confluenceID,
+		Title:        title,
+	}
+}
+
+// LogNotFoundErrors prints all recorded 404 errors
+func (bp *BatchPool) LogNotFoundErrors() {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	if len(bp.notFoundErrors) > 0 {
+		log.Println("--- Documents Not Found (404 Errors) ---")
+		for difyID, info := range bp.notFoundErrors {
+			log.Printf("DifyID: %s, SpaceKey: %s, ConfluenceID: %s, Title: %s",
+				difyID, info.SpaceKey, info.ConfluenceID, info.Title)
+		}
+		log.Println("----------------------------------------")
+	} else {
+		log.Println("No '404 Not Found' errors were recorded during execution.")
+	}
 }
