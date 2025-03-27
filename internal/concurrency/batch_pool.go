@@ -9,25 +9,30 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 )
 
-// NotFoundErrorInfo holds information about a document not found error
+// NotFoundErrorInfo stores details of 404 errors
 type NotFoundErrorInfo struct {
-	SpaceKey     string
-	ConfluenceID string
-	Title        string
+	SpaceKey     string // Confluence space key
+	ConfluenceID string // Confluence document ID
+	Title        string // Document title
 }
 
+// BatchPool manages concurrent batch processing
 type BatchPool struct {
-	mu             sync.Mutex
-	cond           *sync.Cond
-	batches        map[string]time.Time
-	maxSize        int
-	statusChecker  func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
-	total          int
-	remain         int
-	total_len      int
-	notFoundErrors map[string]NotFoundErrorInfo // Map to store not found errors, keyed by DifyID
+	mu             sync.Mutex                                                                                        // Mutex for thread safety
+	cond           *sync.Cond                                                                                        // Condition variable for waiting
+	batches        map[string]time.Time                                                                              // Active batches with timestamps
+	maxSize        int                                                                                               // Maximum concurrent batches
+	statusChecker  func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error) // Status check callback
+	total          int                                                                                               // Total operations count
+	remain         int                                                                                               // Remaining operations count
+	total_len      int                                                                                               // Length of total operations as string
+	notFoundErrors map[string]NotFoundErrorInfo                                                                      // Map of 404 errors by DifyID
 }
 
+// NewBatchPool creates a new batch processing pool
+// maxSize: Maximum concurrent batches
+// statusChecker: Callback function to check batch status
+// Returns initialized BatchPool
 func NewBatchPool(maxSize int, statusChecker func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)) *BatchPool {
 	bp := &BatchPool{
 		batches:        make(map[string]time.Time),
@@ -39,6 +44,12 @@ func NewBatchPool(maxSize int, statusChecker func(spaceKey, confluenceID, title,
 	return bp
 }
 
+// Add adds a new batch to the pool and starts monitoring
+// spaceKey: Confluence space key
+// confluenceID: Confluence document ID
+// title: Document title
+// batch: Batch ID
+// op: Content operation details
 func (bp *BatchPool) Add(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -51,6 +62,12 @@ func (bp *BatchPool) Add(spaceKey, confluenceID, title, batch string, op conflue
 	go bp.monitorBatch(spaceKey, confluenceID, title, batch, op)
 }
 
+// monitorBatch periodically checks batch status until completion
+// spaceKey: Confluence space key
+// confluenceID: Confluence document ID
+// title: Document title
+// batch: Batch ID
+// op: Content operation details
 func (bp *BatchPool) monitorBatch(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -84,6 +101,8 @@ func (bp *BatchPool) monitorBatch(spaceKey, confluenceID, title, batch string, o
 	}
 }
 
+// remove deletes a batch from the pool and signals waiting goroutines
+// batch: Batch ID to remove
 func (bp *BatchPool) remove(batch string) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -92,7 +111,7 @@ func (bp *BatchPool) remove(batch string) {
 	bp.cond.Signal()
 }
 
-// WaitForAvailable waits until there is available space in the batch pool
+// WaitForAvailable blocks until pool has available capacity
 func (bp *BatchPool) WaitForAvailable() {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -102,17 +121,18 @@ func (bp *BatchPool) WaitForAvailable() {
 	}
 }
 
-// Size returns the current number of batches in the pool
+// Size returns current active batch count
 func (bp *BatchPool) Size() int {
 	return len(bp.batches)
 }
 
-// MaxSize returns the maximum capacity of the batch pool
+// MaxSize returns pool's maximum concurrent batch capacity
 func (bp *BatchPool) MaxSize() int {
 	return bp.maxSize
 }
 
-// SetTotal sets the total number of operations
+// SetTotal configures total operations count
+// total: Total number of operations
 func (bp *BatchPool) SetTotal(total int) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -121,29 +141,34 @@ func (bp *BatchPool) SetTotal(total int) {
 	bp.total_len = len(totalStr)
 }
 
-// SetRemain sets the remaining number of operations
+// SetRemain updates remaining operations count
+// remain: Number of operations remaining
 func (bp *BatchPool) SetRemain(remain int) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 	bp.remain = remain
 }
 
-// GetTotalLen returns the length of the total operations count as a string
+// GetTotalLen returns string length of total operations count
 func (bp *BatchPool) GetTotalLen() int {
 	return bp.total_len
 }
 
-// GetCompleted returns the completed number of operations
+// GetCompleted returns count of completed operations
 func (bp *BatchPool) GetCompleted() int {
 	return bp.total - bp.remain
 }
 
-// GetTotal returns the total number of operations
+// GetTotal returns total operations count
 func (bp *BatchPool) GetTotal() int {
 	return bp.total
 }
 
-// recordNotFoundError stores the details of a 404 error
+// recordNotFoundError logs 404 error details
+// difyID: Dify document ID
+// spaceKey: Confluence space key
+// confluenceID: Confluence document ID
+// title: Document title
 func (bp *BatchPool) recordNotFoundError(difyID, spaceKey, confluenceID, title string) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
@@ -154,7 +179,7 @@ func (bp *BatchPool) recordNotFoundError(difyID, spaceKey, confluenceID, title s
 	}
 }
 
-// LogNotFoundErrors prints all recorded 404 errors
+// LogNotFoundErrors outputs all recorded 404 errors
 func (bp *BatchPool) LogNotFoundErrors() {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()

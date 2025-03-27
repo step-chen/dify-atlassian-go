@@ -15,22 +15,27 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/config"
 )
 
-// Client defines the Dify API client
+// Client handles communication with the Dify API
 type Client struct {
-	baseURL    string         // Base URL of the Dify API
-	apiKey     string         // API key for authentication
-	datasetID  string         // Dataset ID to operate on
-	httpClient *http.Client   // HTTP client for making requests
-	config     *config.Config // Configuration
-	meta       map[string]MetaField
+	baseURL    string               // API endpoint base URL
+	apiKey     string               // Decrypted API key for authentication
+	datasetID  string               // Target dataset ID for operations
+	httpClient *http.Client         // HTTP client with default timeout
+	config     *config.Config       // Application configuration
+	meta       map[string]MetaField // Metadata fields mapping
 }
 
-// DatasetID returns the dataset ID
+// DatasetID returns the configured dataset ID for this client
 func (c *Client) DatasetID() string {
 	return c.datasetID
 }
 
-// NewClient creates a new Dify client instance
+// NewClient initializes a new Dify API client
+// baseURL: API endpoint URL
+// apiKey: Encrypted API key
+// datasetID: Target dataset ID
+// cfg: Application configuration
+// Returns initialized client or error
 func NewClient(baseURL, apiKey, datasetID string, cfg *config.Config) (*Client, error) {
 	// Decrypt API Key
 	decryptedKey, err := config.Decrypt(apiKey)
@@ -47,7 +52,11 @@ func NewClient(baseURL, apiKey, datasetID string, cfg *config.Config) (*Client, 
 	}, nil
 }
 
-// GetIndexingStatus retrieves the indexing status of a document
+// GetIndexingStatus checks document indexing progress
+// ctx: Context for request cancellation
+// spaceKey: Target space identifier
+// batch: Batch ID to check status for
+// Returns indexing status details or error
 func (c *Client) GetIndexingStatus(ctx context.Context, spaceKey, batch string) (*IndexingStatusResponse, error) {
 	url := fmt.Sprintf("%s/datasets/%s/documents/%s/indexing-status", c.baseURL, c.datasetID, batch)
 
@@ -76,7 +85,10 @@ func (c *Client) GetIndexingStatus(ctx context.Context, spaceKey, batch string) 
 	return &statusResponse, nil
 }
 
-// CreateDocumentByText creates a new document
+// CreateDocumentByText creates document from text content
+// ctx: Context for request cancellation
+// req: Document creation request details
+// Returns creation response or error
 func (c *Client) CreateDocumentByText(ctx context.Context, req *CreateDocumentRequest) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
@@ -115,7 +127,12 @@ func (c *Client) CreateDocumentByText(ctx context.Context, req *CreateDocumentRe
 	return &response, nil
 }
 
-// CreateDocumentByFile creates a new document by uploading a file
+// CreateDocumentByFile creates document from file upload
+// ctx: Context for request cancellation
+// filePath: Path to source file
+// req: Document creation request details
+// title: Document title
+// Returns creation response or error
 func (c *Client) CreateDocumentByFile(ctx context.Context, filePath string, req *CreateDocumentByFileRequest, title string) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
@@ -185,7 +202,10 @@ func (c *Client) CreateDocumentByFile(ctx context.Context, filePath string, req 
 	return &response, nil
 }
 
-// FetchDocumentsList retrieves all documents in the dataset
+// FetchDocumentsList retrieves paginated document list
+// page: Starting page number (0-based)
+// limit: Number of items per page (max 100)
+// Returns map of document info or error
 type DocumentInfo struct {
 	DifyID string
 	When   string
@@ -258,7 +278,12 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, e
 	return allDocuments, nil
 }
 
-// UpdateDocumentByText updates a document by text
+// UpdateDocumentByText modifies existing document content
+// ctx: Context for request cancellation
+// datasetID: Target dataset ID
+// documentID: Document ID to update
+// req: Update request details
+// Returns update response or error
 func (c *Client) UpdateDocumentByText(ctx context.Context, datasetID, documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
@@ -296,7 +321,10 @@ func (c *Client) UpdateDocumentByText(ctx context.Context, datasetID, documentID
 	return &response, nil
 }
 
-// DeleteDocument deletes a document by ID
+// DeleteDocument removes document from dataset
+// ctx: Context for request cancellation
+// documentID: ID of document to delete
+// Returns error if deletion fails
 func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
 	url := fmt.Sprintf("%s/datasets/%s/documents/%s", c.baseURL, c.datasetID, documentID)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)

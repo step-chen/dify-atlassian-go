@@ -8,7 +8,10 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 )
 
-// JobType defines the type of job to be processed
+// JobType enumerates possible job types
+// JobTypeContent: Process Confluence content
+// JobTypeAttachment: Process Confluence attachment
+// JobTypeDelete: Delete document
 type JobType int
 
 const (
@@ -17,7 +20,15 @@ const (
 	JobTypeDelete
 )
 
-// Job represents a unit of work for the worker
+// Job contains all information needed to process a work unit
+// Type: Job type (content/attachment/delete)
+// DocumentID: Target document ID
+// SpaceKey: Confluence space key
+// Content: Confluence content data (optional)
+// Attachment: Confluence attachment data (optional)
+// Client: Dify API client
+// ConfluenceClient: Confluence API client (optional)
+// Op: Content operation details
 type Job struct {
 	Type             JobType                // Type of job
 	DocumentID       string                 // Document ID
@@ -29,12 +40,16 @@ type Job struct {
 	Op               confluence.ContentOperation
 }
 
-// JobChannels contains all job channels for workers
+// JobChannels manages job distribution channels
+// Jobs: Channel for sending jobs to workers
 type JobChannels struct {
 	Jobs chan Job
 }
 
 // worker processes jobs from the job channel
+// jobChan: Channel to receive jobs from
+// wg: WaitGroup to signal job completion
+// Handles content creation/update, attachment upload, and document deletion
 func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for job := range jobChan {

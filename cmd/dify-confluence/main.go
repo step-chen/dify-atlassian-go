@@ -21,40 +21,25 @@ var (
 	cfg             *config.Config                                    // Global configuration
 )
 
-// main is the entry point of the application
-// It performs the following steps:
-// 1. Loads configuration
-// 2. Checks and sets up environment
-// 3. Initializes database
-// 4. Initializes Dify clients for each space
-// 5. Initializes Confluence client
-// 6. Cleans up invalid mapping records
-// 7. Creates worker pool
-// 8. Processes all space keys
-// 9. Waits for workers to complete
+// Application entry point, handles initialization and task processing
 func main() {
-	// Load configuration file from current directory
+	// Load config file
 	var err error
 	cfg, err = config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Check and setup environment
-	/*if err := utils.CheckEnvironment(); err != nil {
-		log.Fatalf("Environment setup failed: %v", err)
-	}*/
-
-	// Check required docker images
+	// Initialize required tools
 	utils.InitRequiredTools()
 
-	// Initialize timeoutContents map
+	// Init timeout contents map
 	timeoutContents = make(map[string]map[string]confluence.ContentOperation)
 
-	// Initialize BatchPool
+	// Init batch pool
 	batchPool = concurrency.NewBatchPool(cfg.Concurrency.BatchPoolSize, statusChecker)
 
-	// Initialize Dify clients for each configured space
+	// Init Dify clients per space
 	difyClients = make(map[string]*dify.Client)
 	for _, spaceKey := range cfg.Confluence.SpaceKeys {
 		datasetID, exists := cfg.Dify.Datasets[spaceKey]
@@ -72,25 +57,25 @@ func main() {
 		difyClients[spaceKey] = client
 	}
 
-	// Initialize Confluence client
+	// Init Confluence client
 	confluenceClient, err := confluence.NewClient(cfg.Confluence.BaseURL, cfg.Confluence.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes)
 	if err != nil {
 		log.Fatalf("failed to create Confluence client: %v", err)
 	}
 
-	// Create worker pool with configured queue size
+	// Create worker pool with queue size
 	jobChannels := JobChannels{
 		Jobs: make(chan Job, cfg.Concurrency.QueueSize),
 	}
 	var wg sync.WaitGroup
 
-	// Start configured number of workers
+	// Start workers
 	for i := 0; i < cfg.Concurrency.Workers; i++ {
 		wg.Add(1)
 		go worker(jobChannels.Jobs, &wg)
 	}
 
-	// Process all configured space keys
+	// Process all spaces
 	for _, spaceKey := range cfg.Confluence.SpaceKeys {
 		c := difyClients[spaceKey]
 		docMetas, err := c.FetchDocumentsList(0, 100)
@@ -100,9 +85,6 @@ func main() {
 		if err := processSpace(spaceKey, c, confluenceClient, &jobChannels, docMetas); err != nil {
 			log.Printf("error processing space %s: %v", spaceKey, err)
 		}
-		/*if err := processSpaceOperations(spaceKey, c, confluenceClient, &jobChannels); err != nil {
-			log.Printf("Error processing space %s: %v", spaceKey, err)
-		}*/
 	}
 
 	wg.Wait()
@@ -124,10 +106,10 @@ func main() {
 	close(jobChannels.Jobs)
 	wg.Wait()
 
-	// Write failed types log
+	// Log failed types
 	utils.WriteFailedTypesLog()
 
-	// Process and print timeout documents
+	// Handle timeout documents
 	if len(timeoutContents) > 0 {
 		retries := 0
 		for retries < cfg.Concurrency.MaxRetries && len(timeoutContents) > 0 {
@@ -144,11 +126,11 @@ func main() {
 		}
 	}
 
-	// Log any documents that resulted in a 404 error during status check
+	// Log 404 errors from status check
 	batchPool.LogNotFoundErrors()
 }
 
-// processTimeoutContents processes all timeout documents by sending them to processContentOperation
+// Handle timeout documents via processContentOperation
 func processTimeoutContents(confluenceClient *confluence.Client, jobChan *JobChannels) error {
 	// Create a copy of space keys to safely iterate
 	spaceKeys := make([]string, 0, len(timeoutContents))
@@ -186,7 +168,7 @@ func processTimeoutContents(confluenceClient *confluence.Client, jobChan *JobCha
 	return nil
 }
 
-// statusChecker checks the status of a batch using Dify client
+// Check batch status using Dify client
 func statusChecker(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

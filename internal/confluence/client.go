@@ -10,7 +10,12 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
-// NewClient creates a new Confluence client
+// NewClient initializes a new Confluence API client
+// baseURL: Confluence instance base URL
+// apiKey: API key for authentication
+// allowedTypes: Map of allowed media types
+// unsupportedTypes: Map of unsupported media types
+// Returns initialized client or error
 func NewClient(baseURL, apiKey string, allowedTypes, unsupportedTypes map[string]bool) (*Client, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
@@ -28,15 +33,24 @@ func NewClient(baseURL, apiKey string, allowedTypes, unsupportedTypes map[string
 	}, nil
 }
 
-// DownloadAttachment downloads an attachment from the provided URL
+// DownloadAttachment fetches and prepares an attachment file
+// url: Attachment download URL
+// fileName: Target file name
+// mediaType: Attachment media type
+// Returns showPath, tmpPath, and error
 func (c *Client) DownloadAttachment(url string, fileName string, mediaType string) (showPath string, tmpPath string, err error) {
 	return utils.PrepareAttachmentFile(url, c.apiKey, fileName, mediaType, c.allowedTypes)
 }
 
+// GetBaseURL returns the configured base URL
+// Returns base URL string
 func (c *Client) GetBaseURL() string {
 	return c.baseURL
 }
 
+// prepareHeader adds required headers to HTTP request
+// req: HTTP request to modify
+// Returns modified request
 func (c *Client) prepareHeader(req *http.Request) *http.Request {
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -44,6 +58,12 @@ func (c *Client) prepareHeader(req *http.Request) *http.Request {
 	return req
 }
 
+// preparePageQuery configures pagination and expansion parameters
+// req: HTTP request to modify
+// limit: Number of results per page
+// start: Pagination start index
+// expand: Fields to expand in response
+// Returns modified request
 func (c *Client) preparePageQuery(req *http.Request, limit string, start string, expand []string) *http.Request {
 	q := req.URL.Query()
 	if limit != "" {
@@ -62,6 +82,9 @@ func (c *Client) preparePageQuery(req *http.Request, limit string, start string,
 	return req
 }
 
+// GetSpaceContentsList retrieves all contents for a space
+// spaceKey: Target space key
+// Returns map of content operations or error
 func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]ContentOperation, err error) {
 	nextPageURL := c.baseURL + "/rest/api/space/" + spaceKey + "/content/page"
 
@@ -123,7 +146,9 @@ func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]Cont
 }
 
 // []string{"body.view", "version", "history", "children.attachment.version", "children.comment", "metadata.labels"
-// GetContent retrieves a single content by ID
+// GetContent fetches detailed content information
+// contentID: Target content ID
+// Returns Content struct or error
 func (c *Client) GetContent(contentID string) (*Content, error) {
 	url := c.baseURL + "/rest/api/content/" + contentID
 	req, err := http.NewRequest("GET", url, nil)
@@ -169,7 +194,9 @@ func (c *Client) GetContent(contentID string) (*Content, error) {
 	return content, nil
 }
 
-// GetAttachment retrieves a single attachment by ID
+// GetAttachment fetches detailed attachment information
+// attachmentID: Target attachment ID
+// Returns Attachment struct or error
 func (c *Client) GetAttachment(attachmentID string) (*Attachment, error) {
 	url := c.baseURL + "/rest/api/content/" + attachmentID
 	req, err := http.NewRequest("GET", url, nil)
@@ -207,6 +234,10 @@ func (c *Client) GetAttachment(attachmentID string) (*Attachment, error) {
 	return attachment, nil
 }
 
+// GetSpaceContents processes all contents in a space
+// spaceKey: Target space key
+// processContent: Callback function to handle each content
+// Returns error if processing fails
 func (c *Client) GetSpaceContents(spaceKey string, processContent func(content Content) error) error {
 	nextPageURL := c.baseURL + "/rest/api/space/" + spaceKey + "/content/page"
 

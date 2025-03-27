@@ -8,18 +8,21 @@ import (
 )
 
 const (
-	MarkitdownRepo    = ".markitdown"
-	MarkitdownRepoURL = "https://github.com/microsoft/markitdown.git"
+	MarkitdownRepo    = ".markitdown"                                 // Local directory for markitdown repository
+	MarkitdownRepoURL = "https://github.com/microsoft/markitdown.git" // Markitdown repository URL
 )
 
+// DockerUtils tracks required Docker image availability
 type DockerUtils struct {
-	markitdownImage bool
-	pandocImage     bool
+	markitdownImage bool // Indicates if markitdown image is available
+	pandocImage     bool // Indicates if pandoc image is available
 }
 
 var dockerUtils DockerUtils = DockerUtils{markitdownImage: false, pandocImage: false}
 
-// CheckImageExists checks if a docker image exists locally
+// CheckImageExists verifies if a Docker image is available locally
+// imageName: Name of the Docker image to check
+// Returns error if image not found or check fails
 func CheckImageExists(imageName string) error {
 	cmd := exec.Command("docker", "images", "-q", imageName)
 	output, err := cmd.Output()
@@ -34,19 +37,23 @@ func CheckImageExists(imageName string) error {
 	return nil
 }
 
-// PullImage pulls a docker image if it doesn't exist
+// PullImage downloads a Docker image if not present locally
+// imageName: Name of the Docker image to pull
+// Returns error if pull operation fails
 func PullImage(imageName string) error {
 	cmd := exec.Command("docker", "pull", imageName)
 	log.Println(cmd.Path + " " + strings.Join(cmd.Args[1:], " "))
 	return cmd.Run()
 }
 
-// CheckRequiredDockerImages checks if both markitdown and pandoc docker images exist
+// InitRequiredTools verifies and initializes required tools
+// Checks for pandoc installation and markitdown Docker image
 func InitRequiredTools() {
 	checkMarkitdownImage()
 	checkPandoc()
 }
 
+// checkPandoc verifies pandoc installation and version
 func checkPandoc() {
 	// Check if pandoc command exists
 	if _, err := exec.LookPath("pandoc"); err != nil {
@@ -68,6 +75,7 @@ func checkPandoc() {
 	dockerUtils.pandocImage = true
 }
 
+// checkMarkitdownImage verifies and builds markitdown Docker image if needed
 func checkMarkitdownImage() {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return

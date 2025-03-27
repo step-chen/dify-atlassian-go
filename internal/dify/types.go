@@ -8,7 +8,15 @@ const (
 	IndexingStatusIndexing  = "indexing"  // Document is currently being indexed
 )
 
-// CreateDocumentRequest defines the request structure for creating a document
+// CreateDocumentRequest contains parameters for document creation
+// Name: Document title
+// Text: Document content
+// DocType: Document category (e.g. "book", "web_page")
+// DocMetadata: Additional document metadata
+// IndexingTechnique: Indexing method (e.g. "high_quality")
+// DocForm: Document structure format
+// DocLanguage: Document language code
+// ProcessRule: Document processing rules
 type CreateDocumentRequest struct {
 	Name              string                 `json:"name"`               // Document name
 	Text              string                 `json:"text"`               // Document content
@@ -20,6 +28,14 @@ type CreateDocumentRequest struct {
 	ProcessRule       config.ProcessRule     `json:"process_rule"`       // Document processing rules
 }
 
+// CreateDocumentByFileRequest contains parameters for file-based document creation
+// OriginalDocumentID: Source document ID (optional)
+// IndexingTechnique: Indexing method to use
+// DocForm: Document structure format
+// DocType: Document category
+// DocMetadata: Additional document metadata
+// DocLanguage: Document language code
+// ProcessRule: Document processing rules
 type CreateDocumentByFileRequest struct {
 	OriginalDocumentID string                 `json:"original_document_id,omitempty"` // Source document ID (optional)
 	IndexingTechnique  string                 `json:"indexing_technique"`             // Indexing technique to use
@@ -30,6 +46,9 @@ type CreateDocumentByFileRequest struct {
 	ProcessRule        config.ProcessRule     `json:"process_rule"`                   // Document processing rules
 }
 
+// DefaultProcessRule provides default document processing rules
+// cfg: Optional configuration to override defaults
+// Returns configured ProcessRule with fallback values
 func DefaultProcessRule(cfg *config.Config) config.ProcessRule {
 	// Use config values if available, otherwise fall back to defaults
 	var processRule config.ProcessRule
@@ -73,7 +92,9 @@ func DefaultProcessRule(cfg *config.Config) config.ProcessRule {
 	return processRule
 }
 
-// CreateDocumentResponse defines the response structure for document creation
+// CreateDocumentResponse contains document creation results
+// Document: Created document details
+// Batch: Processing batch ID
 type CreateDocumentResponse struct {
 	Document struct {
 		ID                   string                 `json:"id"`                      // Document ID
@@ -101,7 +122,8 @@ type CreateDocumentResponse struct {
 	Batch string `json:"batch"` // Batch ID for the document creation
 }
 
-// IndexingStatusResponse defines the response structure for indexing status
+// IndexingStatusResponse contains document indexing progress
+// Data: Array of indexing status records
 type IndexingStatusResponse struct {
 	Data []struct {
 		ID                   string  `json:"id"`
@@ -119,14 +141,21 @@ type IndexingStatusResponse struct {
 	} `json:"data"`
 }
 
-// UpdateDocumentRequest defines the request structure for updating a document
+// UpdateDocumentRequest contains parameters for document updates
+// Name: New document title (optional)
+// Text: Updated document content (optional)
+// ProcessRule: Updated processing rules (optional)
 type UpdateDocumentRequest struct {
 	Name        string             `json:"name,omitempty"`
 	Text        string             `json:"text,omitempty"`
 	ProcessRule config.ProcessRule `json:"process_rule,omitempty"`
 }
 
-// DocumentListResponse defines the response structure for retrieving document list
+// DocumentListResponse contains paginated document list
+// Data: Array of document records
+// Total: Total document count
+// HasMore: Indicates if more documents are available
+// Page: Current page number
 type DocumentListResponse struct {
 	Data []struct {
 		ID          string `json:"id"`

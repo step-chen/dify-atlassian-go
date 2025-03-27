@@ -13,7 +13,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Config represents the application's configuration structure
+// Config contains all application configuration settings
+// Confluence: Configuration for Confluence API integration
+// Concurrency: Settings for concurrent processing
+// Dify: Configuration for Dify API integration
+// AllowedTypes: Map of supported media types
+// UnsupportedTypes: Map of unsupported media types
 type Config struct {
 	Confluence       ConfluenceConfig  `yaml:"confluence"`        // Confluence API configuration
 	Concurrency      ConcurrencyConfig `yaml:"concurrency"`       // Concurrency settings
@@ -22,13 +27,19 @@ type Config struct {
 	UnsupportedTypes map[string]bool   `yaml:"unsupported_types"` // Unsupported media types
 }
 
-// ProcessRule defines document processing rules configuration
+// ProcessRule configures document processing behavior
+// Mode: Processing mode (automatic/custom)
+// Rules: Custom processing rules
 type ProcessRule struct {
 	Mode  string `yaml:"mode" json:"mode"`   // Cleaning, segmentation mode (e.g. "automatic", "custom")
 	Rules Rules  `yaml:"rules" json:"rules"` // Custom rules (in automatic mode, this field is empty)
 }
 
-// Rules defines the rules structure for document processing
+// Rules contains document processing rules
+// PreProcessingRules: List of preprocessing steps
+// Segmentation: Main segmentation rules
+// ParentMode: Parent document handling mode
+// SubchunkSegmentation: Subchunk segmentation rules
 type Rules struct {
 	PreProcessingRules   []PreprocessingRules     `yaml:"pre_processing_rules" json:"pre_processing_rules"` // List of preprocessing rules
 	Segmentation         SegmentationRule         `yaml:"segmentation" json:"segmentation"`                 // Segmentation rules
@@ -36,26 +47,39 @@ type Rules struct {
 	SubchunkSegmentation SubchunkSegmentationRule `yaml:"subchunk_segmentation" json:"subchunk_segmentation"`
 }
 
-// PreprocessingRule defines preprocessing rules
+// PreprocessingRules configures individual preprocessing steps
+// ID: Rule identifier
+// Enabled: Whether the rule is active
 type PreprocessingRules struct {
 	ID      string `yaml:"id" json:"id"`
 	Enabled bool   `yaml:"enabled" json:"enabled"`
 }
 
-// SegmentationRule defines segmentation rules
+// SegmentationRule configures document segmentation
+// Separator: Text separator for segmentation
+// MaxTokens: Maximum token count per segment
 type SegmentationRule struct {
 	Separator string `yaml:"separator" json:"separator"`   // Custom segment identifier
 	MaxTokens int    `yaml:"max_tokens" json:"max_tokens"` // Maximum length (token)
 }
 
-// SubchunkSegmentationRule defines subchunk segmentation rules
+// SubchunkSegmentationRule configures subchunk segmentation
+// Separator: Text separator for subchunks
+// MaxTokens: Maximum token count per subchunk
+// ChunkOverlap: Token overlap between adjacent subchunks
 type SubchunkSegmentationRule struct {
 	Separator    string `yaml:"separator" json:"separator"`         // Segmentation identifier
 	MaxTokens    int    `yaml:"max_tokens" json:"max_tokens"`       // Maximum length (tokens)
 	ChunkOverlap int    `yaml:"chunk_overlap" json:"chunk_overlap"` // Overlap between adjacent chunks
 }
 
-// ConcurrencyConfig defines concurrency settings
+// ConcurrencyConfig manages parallel processing settings
+// Enabled: Whether concurrency is active
+// Workers: Number of concurrent workers
+// QueueSize: Size of processing queue
+// BatchPoolSize: Maximum concurrent batches
+// IndexingTimeout: Document indexing timeout (minutes)
+// MaxRetries: Maximum retry attempts for failed documents
 type ConcurrencyConfig struct {
 	Enabled         bool `yaml:"enabled"`          // Whether concurrency is enabled
 	Workers         int  `yaml:"workers"`          // Number of concurrent workers
@@ -65,7 +89,11 @@ type ConcurrencyConfig struct {
 	MaxRetries      int  `yaml:"max_retries"`      // Maximum number of retries for timeout documents
 }
 
-// DifyConfig defines Dify API configuration
+// DifyConfig contains Dify API integration settings
+// BaseURL: Dify API endpoint
+// APIKey: Authentication key
+// Datasets: Space to dataset mappings
+// RagSetting: Retrieval-Augmented Generation configuration
 type DifyConfig struct {
 	BaseURL    string            `yaml:"base_url"`    // Base URL for Dify API
 	APIKey     string            `yaml:"api_key"`     // API key for authentication
@@ -73,13 +101,20 @@ type DifyConfig struct {
 	RagSetting RagSetting        `yaml:"rag_setting"` // RAG settings
 }
 
+// RagSetting configures Retrieval-Augmented Generation
+// IndexingTechnique: Document indexing method
+// DocForm: Document format
+// ProcessRule: Document processing rules
 type RagSetting struct {
 	IndexingTechnique string       `yaml:"indexing_technique"` // Document indexing technique
 	DocForm           string       `yaml:"doc_form"`           // Document form
 	ProcessRule       *ProcessRule `yaml:"process_rule"`       // Document processing rules
 }
 
-// ConfluenceConfig defines Confluence API configuration
+// ConfluenceConfig contains Confluence API integration settings
+// BaseURL: Confluence API endpoint
+// APIKey: Authentication key
+// SpaceKeys: List of spaces to process
 type ConfluenceConfig struct {
 	BaseURL   string   `yaml:"base_url"`   // Base URL for Confluence API
 	APIKey    string   `yaml:"api_key"`    // API key for authentication
@@ -87,9 +122,12 @@ type ConfluenceConfig struct {
 }
 
 // WARNING: This encryption key should be securely stored and rotated periodically
+// Consider using a key management system for production environments
 var encryptionKey = []byte("32-byte-long-encryption-key-here")
 
-// LoadConfig loads and validates the configuration from the specified path
+// LoadConfig reads, validates and decrypts configuration
+// path: Path to YAML configuration file
+// Returns parsed configuration or error
 // Parameters:
 //   - path: Path to the configuration file
 //
@@ -130,7 +168,9 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Encrypt encrypts the given plaintext using AES encryption
+// Encrypt securely encrypts text using AES-256
+// plaintext: Text to encrypt
+// Returns base64 encoded ciphertext or error
 // Parameters:
 //   - plaintext: The text to encrypt
 //
@@ -155,7 +195,9 @@ func Encrypt(plaintext string) (string, error) {
 	return base64.URLEncoding.EncodeToString(ciphertext), nil
 }
 
-// Decrypt decrypts the given ciphertext using AES decryption
+// Decrypt securely decrypts AES-256 encrypted text
+// ciphertext: Base64 encoded ciphertext
+// Returns decrypted plaintext or error
 // Parameters:
 //   - ciphertext: Base64 encoded encrypted text
 //
