@@ -32,7 +32,7 @@ type MetadataResponse struct {
 }
 
 func (c *Client) InitMetadata() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel() // Ensure context is canceled to release resources
 
 	meta, err := c.GetDatasetMetadata(ctx)

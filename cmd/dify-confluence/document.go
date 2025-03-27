@@ -105,7 +105,7 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 }
 
 func createDocument(j *Job) error {
-	// Create context with 5 minute timeout to prevent hanging
+	// Create context with 2 minute timeout to prevent hanging
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel() // Ensure context is canceled to release resources
 
@@ -144,8 +144,8 @@ func createDocument(j *Job) error {
 }
 
 func updateDocument(j *Job) error {
-	// Create context with 5 minute timeout to prevent hanging
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Create context with 2 minute timeout to prevent hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel() // Ensure context is canceled to release resources
 
 	var resp *dify.CreateDocumentResponse
@@ -175,7 +175,7 @@ func updateDocument(j *Job) error {
 }
 
 func uploadDocumentByFile(j *Job) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	var docResp *dify.CreateDocumentResponse
@@ -261,7 +261,7 @@ func updateDocumentMetadata(ctx context.Context, client *dify.Client, documentID
 }
 
 func deleteDocument(j *Job) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// Delete document
