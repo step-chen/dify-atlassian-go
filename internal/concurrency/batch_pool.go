@@ -1,6 +1,7 @@
 package concurrency
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 // NotFoundErrorInfo stores details of 404 errors
 type NotFoundErrorInfo struct {
+	datasetID    string
 	SpaceKey     string // Confluence space key
 	ConfluenceID string // Confluence document ID
 	Title        string // Document title
@@ -23,8 +25,8 @@ type BatchPool struct {
 	batches        map[string]time.Time                                                                              // Active batches with timestamps
 	maxSize        int                                                                                               // Maximum concurrent batches
 	statusChecker  func(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error) // Status check callback
-	total          int                                                                                               // Total operations count
-	remain         int                                                                                               // Remaining operations count
+	total          map[string]int                                                                                    // Total operations count
+	remain         map[string]int                                                                                    // Remaining operations count
 	total_len      int                                                                                               // Length of total operations as string
 	notFoundErrors map[string]NotFoundErrorInfo                                                                      // Map of 404 errors by DifyID
 }
@@ -75,23 +77,23 @@ func (bp *BatchPool) monitorBatch(spaceKey, confluenceID, title, batch string, o
 	for range ticker.C {
 		status, err := bp.statusChecker(spaceKey, confluenceID, title, batch, op)
 		if status == "completed" {
-			log.Printf("% *d/%d successfully indexing Dify document %s for [%s] content [%s]", bp.GetTotalLen(), bp.GetCompleted(), bp.GetTotal(), op.DifyID, spaceKey, title)
-			bp.SetRemain(bp.remain - 1)
+			log.Printf("%s successfully indexing Dify document %s for content [%s]", bp.ProgressString(spaceKey), op.DifyID, title)
+			bp.ReduceRemain(spaceKey)
 			bp.remove(batch)
 			return
 		} else if status == "deleted" {
-			log.Printf("deleted document %s for [%s] content [%s] due to timeout", op.DifyID, spaceKey, title)
+			log.Printf("[%s] deleted Dify document %s for content [%s] due to timeout", spaceKey, op.DifyID, title)
 			bp.remove(batch)
 			return
 		} else if err != nil {
 			if err.Error() == "unexpected status code: 404" {
-				log.Printf("document %s for [%s] content [%s] batch [%s] not found", op.DifyID, spaceKey, title, batch)
+				log.Printf("[%s] indexing status Dify document %s batch %s for content [%s] not found", spaceKey, op.DifyID, title, batch)
 				bp.recordNotFoundError(op.DifyID, spaceKey, confluenceID, title) // Record the error
-				bp.SetRemain(bp.remain - 1)
+				bp.ReduceRemain(spaceKey)
 				bp.remove(batch)
 				return
 			}
-			log.Printf("failed to check status of batch %s: %v", batch, err)
+			log.Printf("[%s] failed to check indexing status Dify document %s batch %s for content [%s]: %v", spaceKey, op.DifyID, title, batch, err)
 			// Consider if other errors should also decrement remain count or be handled differently
 			// For now, just log and let the ticker retry or timeout handle it.
 			// If we return here, the batch might get stuck if the error is persistent but not a 404.
@@ -126,42 +128,31 @@ func (bp *BatchPool) Size() int {
 	return len(bp.batches)
 }
 
-// MaxSize returns pool's maximum concurrent batch capacity
-func (bp *BatchPool) MaxSize() int {
-	return bp.maxSize
-}
-
 // SetTotal configures total operations count
 // total: Total number of operations
-func (bp *BatchPool) SetTotal(total int) {
+func (bp *BatchPool) SetTotal(spaceKey string, total int) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
-	bp.total = total
-	totalStr := strconv.Itoa(bp.total)
-	bp.total_len = len(totalStr)
+	bp.total[spaceKey] = total
+	bp.remain[spaceKey] = total
+	totalStr := strconv.Itoa(total)
+	if len(totalStr) > bp.total_len {
+		bp.total_len = len(totalStr)
+	}
 }
 
 // SetRemain updates remaining operations count
 // remain: Number of operations remaining
-func (bp *BatchPool) SetRemain(remain int) {
+func (bp *BatchPool) ReduceRemain(spaceKey string) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
-	bp.remain = remain
+	bp.remain[spaceKey] = bp.remain[spaceKey] - 1
 }
 
-// GetTotalLen returns string length of total operations count
-func (bp *BatchPool) GetTotalLen() int {
-	return bp.total_len
-}
-
-// GetCompleted returns count of completed operations
-func (bp *BatchPool) GetCompleted() int {
-	return bp.total - bp.remain
-}
-
-// GetTotal returns total operations count
-func (bp *BatchPool) GetTotal() int {
-	return bp.total
+func (bp *BatchPool) ProgressString(spaceKey string) string {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	return fmt.Sprintf("[%s] % *d/%d", spaceKey, bp.remain[spaceKey], bp.total_len, bp.total[spaceKey])
 }
 
 // recordNotFoundError logs 404 error details
@@ -181,9 +172,6 @@ func (bp *BatchPool) recordNotFoundError(difyID, spaceKey, confluenceID, title s
 
 // LogNotFoundErrors outputs all recorded 404 errors
 func (bp *BatchPool) LogNotFoundErrors() {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
-
 	if len(bp.notFoundErrors) > 0 {
 		log.Println("--- Documents Not Found (404 Errors) ---")
 		for difyID, info := range bp.notFoundErrors {

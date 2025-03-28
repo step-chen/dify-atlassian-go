@@ -24,6 +24,8 @@ func processSpace(spaceKey string, client *dify.Client, confluenceClient *conflu
 		return fmt.Errorf("error initializing operations for space %s: %w", spaceKey, err)
 	}
 
+	batchPool.SetTotal(spaceKey, len(contents))
+
 	// Process each content operation
 	for contentID, operation := range contents {
 		if err := processContentOperation(contentID, operation, spaceKey, client, confluenceClient, jobChan); err != nil {
@@ -67,8 +69,6 @@ func initOperations(client *dify.Client, contents map[string]confluence.ContentO
 		}
 	}
 
-	batchPool.SetRemain(len(contents))
-	batchPool.SetTotal(len(contents))
 	return nil
 }
 
@@ -261,6 +261,7 @@ func deleteDocument(j *Job) error {
 		return err
 	}
 
-	log.Printf("% *d/%d successfully deleted Dify document: %s", batchPool.GetTotalLen(), batchPool.GetCompleted(), batchPool.GetTotal(), j.DocumentID)
+	batchPool.ReduceRemain(j.SpaceKey)
+	log.Printf("%s successfully deleted Dify document: %s", batchPool.ProgressString(j.SpaceKey), j.DocumentID)
 	return nil
 }
