@@ -57,7 +57,10 @@ func NewClient(baseURL, apiKey, datasetID string, cfg *config.Config) (*Client, 
 // spaceKey: Target space identifier
 // batch: Batch ID to check status for
 // Returns indexing status details or error
-func (c *Client) GetIndexingStatus(ctx context.Context, spaceKey, batch string) (*IndexingStatusResponse, error) {
+func (c *Client) GetIndexingStatus(spaceKey, batch string) (*IndexingStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	url := fmt.Sprintf("%s/datasets/%s/documents/%s/indexing-status", c.baseURL, c.datasetID, batch)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -89,7 +92,7 @@ func (c *Client) GetIndexingStatus(ctx context.Context, spaceKey, batch string) 
 // ctx: Context for request cancellation
 // req: Document creation request details
 // Returns creation response or error
-func (c *Client) CreateDocumentByText(ctx context.Context, req *CreateDocumentRequest) (*CreateDocumentResponse, error) {
+func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
 	}
@@ -98,6 +101,9 @@ func (c *Client) CreateDocumentByText(ctx context.Context, req *CreateDocumentRe
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	// Create context with 2 minute timeout to prevent hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel() // Ensure context is canceled to release resources
 
 	url := fmt.Sprintf("%s/datasets/%s/document/create-by-text", c.baseURL, c.datasetID)
 	createDocRequest, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
@@ -133,7 +139,7 @@ func (c *Client) CreateDocumentByText(ctx context.Context, req *CreateDocumentRe
 // req: Document creation request details
 // title: Document title
 // Returns creation response or error
-func (c *Client) CreateDocumentByFile(ctx context.Context, filePath string, req *CreateDocumentByFileRequest, title string) (*CreateDocumentResponse, error) {
+func (c *Client) CreateDocumentByFile(filePath string, req *CreateDocumentByFileRequest, title string) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
 	}
@@ -173,6 +179,9 @@ func (c *Client) CreateDocumentByFile(ctx context.Context, filePath string, req 
 	if err := writer.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 
 	url := fmt.Sprintf("%s/datasets/%s/document/create-by-file", c.baseURL, c.datasetID)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
@@ -284,7 +293,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, e
 // documentID: Document ID to update
 // req: Update request details
 // Returns update response or error
-func (c *Client) UpdateDocumentByText(ctx context.Context, datasetID, documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
+func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
 	}
@@ -294,28 +303,51 @@ func (c *Client) UpdateDocumentByText(ctx context.Context, datasetID, documentID
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
 	url := fmt.Sprintf("%s/datasets/%s/documents/%s/update-by-text", c.baseURL, datasetID, documentID)
-	updateRequest, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	updateRequest.Header.Set("Content-Type", "application/json")
-	updateRequest.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(updateRequest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
 
 	var response CreateDocumentResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	maxRetries := 5
+	baseDelay := time.Second
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		updateRequest, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		updateRequest.Header.Set("Content-Type", "application/json")
+		updateRequest.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+		resp, err := c.httpClient.Do(updateRequest)
+		if err != nil {
+			if attempt == maxRetries-1 {
+				return nil, fmt.Errorf("failed to send request after %d attempts: %w", maxRetries, err)
+			}
+			time.Sleep(time.Duration(attempt+1) * baseDelay)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+				return nil, fmt.Errorf("failed to decode response: %w", err)
+			}
+			return &response, nil
+		}
+
+		// Only retry on server errors (5xx) or rate limiting (429)
+		if resp.StatusCode < 500 && resp.StatusCode != 429 {
+			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		if attempt == maxRetries-1 {
+			return nil, fmt.Errorf("unexpected status code after %d attempts: %d", maxRetries, resp.StatusCode)
+		}
+
+		time.Sleep(time.Duration(attempt+1) * baseDelay)
 	}
 
 	return &response, nil
@@ -325,7 +357,10 @@ func (c *Client) UpdateDocumentByText(ctx context.Context, datasetID, documentID
 // ctx: Context for request cancellation
 // documentID: ID of document to delete
 // Returns error if deletion fails
-func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
+func (c *Client) DeleteDocument(documentID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	url := fmt.Sprintf("%s/datasets/%s/documents/%s", c.baseURL, c.datasetID, documentID)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {

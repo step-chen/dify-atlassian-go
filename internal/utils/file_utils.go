@@ -46,7 +46,7 @@ func ConvertWithPandoc(inputPath string) (string, error) {
 	outputExt := ".md"
 	outputPath := inputPath[:len(inputPath)-len(filepath.Ext(inputPath))] + outputExt
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "pandoc", "-t", "markdown", inputPath, "-o", outputPath)
@@ -79,8 +79,11 @@ func ConvertWithMarkitdown(inputPath string) (string, error) {
 	}
 	defer outputFile.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
 	// Prepare docker command
-	cmd := exec.Command("docker", "run", "--rm", "-i", MarkitdownImage)
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", MarkitdownImage)
 	cmd.Stdin = inputFile
 	cmd.Stdout = outputFile
 

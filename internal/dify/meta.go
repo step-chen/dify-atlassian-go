@@ -199,12 +199,16 @@ type UpdateDocumentMetadataRequest struct {
 }
 
 // UpdateDocumentMetadataByFields updates document metadata using field names and values
-func (c *Client) UpdateDocumentMetadata(ctx context.Context, request UpdateDocumentMetadataRequest) error {
+func (c *Client) UpdateDocumentMetadata(request UpdateDocumentMetadataRequest) error {
 	url := fmt.Sprintf("%s/datasets/%s/documents/metadata", c.baseURL, c.datasetID)
 	jsonData, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
+
+	// Create context with 2 minute timeout to prevent hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel() // Ensure context is canceled to release resources
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {

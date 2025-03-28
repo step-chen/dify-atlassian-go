@@ -2,6 +2,7 @@ package confluence
 
 import (
 	"net/http"
+	"time"
 )
 
 // Client represents a Confluence v1 API client
@@ -36,6 +37,7 @@ type ContentOperation struct {
 	MediaType        string // Mime type
 	DifyID           string
 	DatasetID        string
+	StartAt          time.Time
 }
 
 type Content struct {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -105,10 +104,6 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 }
 
 func createDocument(j *Job) error {
-	// Create context with 2 minute timeout to prevent hanging
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel() // Ensure context is canceled to release resources
-
 	var resp *dify.CreateDocumentResponse
 
 	// Create new document
@@ -119,7 +114,7 @@ func createDocument(j *Job) error {
 		DocForm:           cfg.Dify.RagSetting.DocForm,
 	}
 
-	resp, err := j.Client.CreateDocumentByText(ctx, &docRequest)
+	resp, err := j.Client.CreateDocumentByText(&docRequest)
 
 	if err != nil {
 		log.Printf("failed to create Dify document for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
@@ -128,10 +123,11 @@ func createDocument(j *Job) error {
 
 	j.Op.DifyID = resp.Document.ID
 	j.Op.DatasetID = j.Client.DatasetID()
+	j.Op.StartAt = time.Now()
 
 	// Update document metadata
-	if err := updateDocumentMetadata(ctx, j.Client, resp.Document.ID, j.Content.URL, "page", j.SpaceKey, j.Content.Title, j.Content.ID, j.Content.PublishDate, ""); err != nil {
-		if errDel := j.Client.DeleteDocument(ctx, resp.Document.ID); errDel != nil {
+	if err := updateDocumentMetadata(j.Client, resp.Document.ID, j.Content.URL, "page", j.SpaceKey, j.Content.Title, j.Content.ID, j.Content.PublishDate, ""); err != nil {
+		if errDel := j.Client.DeleteDocument(resp.Document.ID); errDel != nil {
 			log.Printf("failed to delete Dify document %s: %v", resp.Document.ID, errDel)
 		}
 		return err
@@ -144,10 +140,6 @@ func createDocument(j *Job) error {
 }
 
 func updateDocument(j *Job) error {
-	// Create context with 2 minute timeout to prevent hanging
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel() // Ensure context is canceled to release resources
-
 	var resp *dify.CreateDocumentResponse
 
 	// Update document
@@ -156,15 +148,17 @@ func updateDocument(j *Job) error {
 		Text: j.Content.Content,
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(ctx, j.Client.DatasetID(), j.DocumentID, &updateRequest)
+	resp, err := j.Client.UpdateDocumentByText(j.Client.DatasetID(), j.DocumentID, &updateRequest)
 
 	if err != nil {
 		log.Printf("failed to update Dify document for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
 		return err
 	}
 
+	j.Op.StartAt = time.Now()
+
 	// Update document metadata
-	if err := updateDocumentMetadata(ctx, j.Client, resp.Document.ID, j.Content.URL, "page", j.SpaceKey, j.Content.Title, j.Content.ID, j.Content.PublishDate, ""); err != nil {
+	if err := updateDocumentMetadata(j.Client, resp.Document.ID, j.Content.URL, "page", j.SpaceKey, j.Content.Title, j.Content.ID, j.Content.PublishDate, ""); err != nil {
 		return err
 	}
 
@@ -175,9 +169,6 @@ func updateDocument(j *Job) error {
 }
 
 func uploadDocumentByFile(j *Job) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
 	var docResp *dify.CreateDocumentResponse
 
 	// Download attachment using Confluence client
@@ -195,16 +186,17 @@ func uploadDocumentByFile(j *Job) error {
 	}
 
 	// Check media type and use appropriate upload method
-	docResp, err = j.Client.CreateDocumentByFile(ctx, filePath, req, showPath)
+	docResp, err = j.Client.CreateDocumentByFile(filePath, req, showPath)
 	if err != nil {
 		return fmt.Errorf("failed to upload attachment for space %s attachment %s: %v", j.SpaceKey, j.Attachment.Title, err)
 	}
 
 	j.Op.DifyID = docResp.Document.ID
 	j.Op.DatasetID = j.Client.DatasetID()
+	j.Op.StartAt = time.Now()
 
 	// Update document metadata
-	if err := updateDocumentMetadata(ctx, j.Client, docResp.Document.ID, j.Attachment.Download, "attachment", j.SpaceKey, j.Attachment.Title, j.Attachment.ID, j.Attachment.LastModifiedDate, j.Attachment.Download); err != nil {
+	if err := updateDocumentMetadata(j.Client, docResp.Document.ID, j.Attachment.Download, "attachment", j.SpaceKey, j.Attachment.Title, j.Attachment.ID, j.Attachment.LastModifiedDate, j.Attachment.Download); err != nil {
 		return err
 	}
 
@@ -215,7 +207,7 @@ func uploadDocumentByFile(j *Job) error {
 }
 
 // updateDocumentMetadata updates document metadata with common fields
-func updateDocumentMetadata(ctx context.Context, client *dify.Client, documentID, url, docType, spaceKey, title, id, timestamp, download string) error {
+func updateDocumentMetadata(client *dify.Client, documentID, url, docType, spaceKey, title, id, timestamp, download string) error {
 	metadata := []dify.DocumentMetadata{}
 	if client.GetMetaID("url") != "" && url != "" {
 		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("url"), Name: "url", Value: url})
@@ -253,7 +245,8 @@ func updateDocumentMetadata(ctx context.Context, client *dify.Client, documentID
 			},
 		},
 	}
-	if err := client.UpdateDocumentMetadata(ctx, updateMetadataRequest); err != nil {
+
+	if err := client.UpdateDocumentMetadata(updateMetadataRequest); err != nil {
 		log.Printf("failed to update metadata for Dify document %s: %v", documentID, err)
 		return err
 	}
@@ -261,11 +254,8 @@ func updateDocumentMetadata(ctx context.Context, client *dify.Client, documentID
 }
 
 func deleteDocument(j *Job) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
 	// Delete document
-	err := j.Client.DeleteDocument(ctx, j.DocumentID)
+	err := j.Client.DeleteDocument(j.DocumentID)
 	if err != nil {
 		log.Printf("failed to delete Dify document %s: %v", j.DocumentID, err)
 		return err
