@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings" // Added strings import
 	"time"
 
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
@@ -13,7 +14,7 @@ import (
 )
 
 // processSpaceOperations processes all operations for a given space using worker queues
-func processSpace(spaceKey string, client *dify.Client, confluenceClient *confluence.Client, jobChan *JobChannels, docMetas map[string]dify.DocumentInfo) error {
+func processSpace(spaceKey string, client *dify.Client, confluenceClient *confluence.Client, jobChan *JobChannels) error {
 	// Get space contents
 	contents, err := confluenceClient.GetSpaceContentsList(spaceKey)
 	if err != nil {
@@ -21,7 +22,7 @@ func processSpace(spaceKey string, client *dify.Client, confluenceClient *conflu
 	}
 
 	// Initialize operations based on existing mappings
-	if err := initOperations(client, contents, docMetas); err != nil {
+	if err := initOperations(client, contents); err != nil {
 		return fmt.Errorf("error initializing operations for space %s: %w", spaceKey, err)
 	}
 
@@ -37,7 +38,12 @@ func processSpace(spaceKey string, client *dify.Client, confluenceClient *conflu
 	return nil
 }
 
-func initOperations(client *dify.Client, contents map[string]confluence.ContentOperation, docMetas map[string]dify.DocumentInfo) error {
+func initOperations(client *dify.Client, contents map[string]confluence.ContentOperation) error {
+	docMetas, err := client.FetchDocumentsList(0, 100)
+	if err != nil {
+		return fmt.Errorf("failed to list documents for dataset: %s: %v", client.DatasetID(), err)
+	}
+
 	for contentID, doc := range docMetas {
 		if op, ok := contents[contentID]; !ok {
 			// Add new operation for unmapped content
@@ -59,7 +65,7 @@ func initOperations(client *dify.Client, contents map[string]confluence.ContentO
 
 			// Determine action based on time comparison
 			if !equal {
-				op.Action = 2 // Update if times differ
+				op.Action = 1 // Update if times differ
 			} else {
 				// Delete the operation since no action is needed
 				delete(contents, contentID)
@@ -71,24 +77,6 @@ func initOperations(client *dify.Client, contents map[string]confluence.ContentO
 	}
 
 	return nil
-}
-
-// prepareTimeoutContents creates a copy of the global timeoutContents, clears the original, and returns the copy.
-func prepareTimeoutContents() map[string]map[string]confluence.ContentOperation {
-	// Create a deep copy of timeoutContents
-	contentsCopy := make(map[string]map[string]confluence.ContentOperation)
-	for spaceKey, spaceContents := range timeoutContents {
-		contentsCopy[spaceKey] = make(map[string]confluence.ContentOperation)
-		for contentID, operation := range spaceContents {
-			contentsCopy[spaceKey][contentID] = operation // Copy the operation struct
-		}
-	}
-
-	// Clear the original timeoutContents map
-	// This creates a new empty map and assigns it back, effectively clearing it.
-	timeoutContents = make(map[string]map[string]confluence.ContentOperation)
-
-	return contentsCopy
 }
 
 // processContentOperation handles individual content operations based on type and action
@@ -146,8 +134,9 @@ func createDocument(j *Job) error {
 
 	// Update document metadata
 	if err := updateDocumentMetadata(j.Client, resp.Document.ID, j.Content.URL, "page", j.SpaceKey, j.Content.Title, j.Content.ID, j.Content.PublishDate, ""); err != nil {
-		if errDel := j.Client.DeleteDocument(resp.Document.ID); errDel != nil {
-			log.Printf("failed to delete Dify document %s: %v", resp.Document.ID, errDel)
+		// Pass Confluence ID (j.Content.ID) during cleanup deletion attempt
+		if errDel := j.Client.DeleteDocument(resp.Document.ID, j.Content.ID); errDel != nil {
+			log.Printf("failed to delete/update Dify document %s after metadata update failure: %v", resp.Document.ID, errDel)
 		}
 		return err
 	} // <--- Added missing closing brace
@@ -257,8 +246,32 @@ func updateDocumentMetadata(client *dify.Client, documentID, url, docType, space
 	if client.GetMetaID("title") != "" && title != "" {
 		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("title"), Name: "title", Value: title})
 	}
-	if client.GetMetaID("id") != "" && id != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("id"), Name: "id", Value: id})
+	// Handle 'id' metadata update logic
+	if metaID := client.GetMetaID("id"); metaID != "" && id != "" {
+		existingIDsStr := client.GetConfluenceIDsForDifyID(documentID)
+		existingIDs := strings.Split(existingIDsStr, ",")
+		idExists := false
+		trimmedNewID := strings.TrimSpace(id)
+
+		for _, existingID := range existingIDs {
+			if strings.TrimSpace(existingID) == trimmedNewID {
+				idExists = true
+				break
+			}
+		}
+
+		finalIDValue := existingIDsStr
+		if !idExists {
+			if existingIDsStr == "" {
+				finalIDValue = trimmedNewID // First ID
+			} else {
+				finalIDValue = existingIDsStr + "," + trimmedNewID // Append new ID
+			}
+			// Update the mapping in the client instance as well
+			client.SetMetaMapping(documentID, finalIDValue)
+		}
+		// Always append the metadata, using the potentially updated finalIDValue
+		metadata = append(metadata, dify.DocumentMetadata{ID: metaID, Name: "id", Value: finalIDValue})
 	}
 	if client.GetMetaID("when") != "" && timestamp != "" {
 		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("when"), Name: "when", Value: timestamp})
@@ -287,11 +300,25 @@ func updateDocumentMetadata(client *dify.Client, documentID, url, docType, space
 }
 
 func deleteDocument(j *Job) error {
-	// Delete document
-	err := j.Client.DeleteDocument(j.DocumentID)
+	// Determine the Confluence ID based on the job type
+	var confluenceID string
+	if j.Type == JobTypeContent && j.Content != nil { // Changed JobTypePage to JobTypeContent
+		confluenceID = j.Content.ID
+	} else if j.Type == JobTypeAttachment && j.Attachment != nil {
+		confluenceID = j.Attachment.ID
+	} else {
+		// Should not happen if job is constructed correctly
+		log.Printf("Error: Could not determine Confluence ID for delete job with Dify ID %s", j.DocumentID)
+		// Fallback: attempt deletion without specific confluence ID? Or return error?
+		// Let's return an error as the DeleteDocument logic now relies on it.
+		return fmt.Errorf("could not determine confluence ID for delete operation on Dify document %s", j.DocumentID)
+	}
+
+	// Delete document or update metadata
+	err := j.Client.DeleteDocument(j.DocumentID, confluenceID)
 	if err != nil {
-		log.Printf("failed to delete Dify document %s: %v", j.DocumentID, err)
-		// Still return the error if deletion failed
+		log.Printf("failed to delete/update Dify document %s (for Confluence ID %s): %v", j.DocumentID, confluenceID, err)
+		// Still return the error if deletion/update failed
 		return err
 	}
 

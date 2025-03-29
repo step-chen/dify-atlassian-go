@@ -78,45 +78,22 @@ func main() {
 		go worker(jobChannels.Jobs, &wg)
 	}
 
-	// Process all spaces
-	for _, spaceKey := range cfg.Confluence.SpaceKeys {
-		c := difyClients[spaceKey]
-		docMetas, err := c.FetchDocumentsList(0, 100)
-		if err != nil {
-			log.Printf("failed to list documents for space %s (dataset: %s): %v", spaceKey, c.DatasetID(), err)
+	for i := 0; i < cfg.Concurrency.MaxRetries+1; i++ {
+		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
+		// Process all spaces
+		for _, spaceKey := range cfg.Confluence.SpaceKeys {
+			c := difyClients[spaceKey]
+			if err := processSpace(spaceKey, c, confluenceClient, &jobChannels); err != nil {
+				log.Printf("error processing space %s: %v", spaceKey, err)
+			}
 		}
-		if err := processSpace(spaceKey, c, confluenceClient, &jobChannels, docMetas); err != nil {
-			log.Printf("error processing space %s: %v", spaceKey, err)
-		}
-	}
-
-	// Now, wait for all submitted batch monitoring tasks from the initial run to complete
-	// The job channel will be closed later, after potential retry jobs are submitted.
-	log.Println("Waiting for initial batch monitoring tasks to complete...")
-	batchPool.Wait()
-	log.Println("Initial batch monitoring complete.")
-
-	// Retry processing timed out contents up to MaxRetries times
-	for i := 0; i < cfg.Concurrency.MaxRetries; i++ {
-		cfg.Concurrency.IndexingTimeout = (i + 2) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
-		log.Printf("Retry attempt %d/%d for timed out documents...", i+1, cfg.Concurrency.MaxRetries)
-		processTimedOutContents(difyClients, confluenceClient, &jobChannels)
-
-		// Wait for batch monitoring tasks submitted during this retry attempt to complete
-		log.Printf("Waiting for batch monitoring tasks from retry attempt %d to complete...", i+1)
+		// Now, wait for all submitted batch monitoring tasks from the initial run to complete
+		// The job channel will be closed later, after potential retry jobs are submitted.
+		log.Println("Waiting for initial batch monitoring tasks to complete...")
 		batchPool.Wait()
-		log.Printf("Batch monitoring tasks from retry attempt %d complete.", i+1)
+		log.Println("Initial batch monitoring complete.")
 
-		// Check if there are still timed out contents after processing and waiting
-		timeoutMutex.Lock()
-		remainingTimeouts := len(timeoutContents)
-		timeoutMutex.Unlock()
-
-		if remainingTimeouts == 0 {
-			log.Println("No more timed out documents to retry.")
-			break // Exit loop if no more timeouts
-		}
-		log.Printf("Found %d remaining timed out documents after attempt %d. Continuing retry if attempts remain.", remainingTimeouts, i+1)
+		timeoutContents = make(map[string]map[string]confluence.ContentOperation) // Clear timeout contents for next retry
 	}
 
 	// Close the job channel *after* submitting initial jobs AND all retry jobs
@@ -131,49 +108,10 @@ func main() {
 	// Log failed types (remains unchanged)
 	utils.WriteFailedTypesLog()
 
-	// Log 404 errors recorded by the batch pool (remains unchanged)
-	batchPool.LogNotFoundErrors()
-
 	// Close the batch pool gracefully
 	batchPool.Close()
 
 	log.Println("Processing complete.")
-}
-
-// processTimedOutContents handles the logic for retrying documents that timed out during indexing.
-func processTimedOutContents(difyClients map[string]*dify.Client, confluenceClient *confluence.Client, jobChannels *JobChannels) {
-	log.Println("Checking for timed out documents to retry...")
-	var copiedTimeoutContents map[string]map[string]confluence.ContentOperation
-
-	timeoutMutex.Lock() // Lock before checking and copying timeoutContents
-	if len(timeoutContents) > 0 {
-		log.Printf("Found %d spaces with timed out documents. Preparing for retry.", len(timeoutContents))
-		copiedTimeoutContents = prepareTimeoutContents() // Copies and clears the global map
-	} else {
-		log.Println("No timed out documents found needing retry.")
-	}
-	timeoutMutex.Unlock() // Unlock after check and copy/clear
-
-	// Process the copied timed-out items outside the lock
-	if len(copiedTimeoutContents) > 0 {
-		log.Println("Submitting retry jobs for timed out documents...")
-		for spaceKey, spaceContents := range copiedTimeoutContents {
-			client, exists := difyClients[spaceKey]
-			if !exists {
-				log.Printf("Error processing retry: No Dify client found for space %s. Skipping.", spaceKey)
-				continue
-			}
-			for contentID, operation := range spaceContents {
-				log.Printf("Retrying content %s in space %s", contentID, spaceKey)
-				// Ensure jobChannels is passed correctly as a pointer
-				if err := processContentOperation(contentID, operation, spaceKey, client, confluenceClient, jobChannels); err != nil {
-					// Log error but continue processing other retries
-					log.Printf("Error submitting retry job for content %s in space %s: %v", contentID, spaceKey, err)
-				}
-			}
-		}
-		log.Println("Finished submitting retry jobs for timed out documents.")
-	}
 }
 
 // Check batch status using Dify client
@@ -195,7 +133,11 @@ func statusChecker(ctx context.Context, spaceKey, confluenceID, title, batch str
 
 	status, err := client.GetIndexingStatus(spaceKey, batch)
 	if err != nil {
-		return "", err
+		if err.Error() == "unexpected status code: 404" {
+			return "completed", nil
+		} else {
+			return "", err
+		}
 	}
 	if len(status.Data) > 0 {
 		if status.Data[0].IndexingStatus == "completed" {
@@ -204,10 +146,12 @@ func statusChecker(ctx context.Context, spaceKey, confluenceID, title, batch str
 		// Check if ProcessingStartedAt is more than 2 minutes ago
 		if time.Since(op.StartAt) > time.Duration(cfg.Concurrency.IndexingTimeout)*time.Minute {
 			fmt.Println("timeout:", op.StartAt, time.Since(op.StartAt), time.Now())
-			// Delete the document
-			err := client.DeleteDocument(status.Data[0].ID)
+			// Delete the document or update metadata
+			// Pass the confluenceID which is a parameter of statusChecker
+			err := client.DeleteDocument(status.Data[0].ID, confluenceID)
 			if err != nil {
-				return "", fmt.Errorf("failed to delete timeout document for %s content %s: %w", spaceKey, title, err)
+				// Error message updated to reflect potential metadata update failure too
+				return "", fmt.Errorf("failed to delete/update timeout document %s for %s content %s: %w", status.Data[0].ID, spaceKey, title, err)
 			}
 
 			// Store and log the ID

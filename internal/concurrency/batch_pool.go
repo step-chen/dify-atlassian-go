@@ -23,34 +23,25 @@ type Task struct {
 	Op           confluence.ContentOperation
 }
 
-// NotFoundErrorInfo stores details of 404 errors (datasetID added, keep if needed)
-type NotFoundErrorInfo struct {
-	DatasetID    string // Added field
-	SpaceKey     string // Confluence space key
-	ConfluenceID string // Confluence document ID
-	Title        string // Document title
-}
-
 // SpaceProgress stores atomic progress counters for a specific spaceKey
 type SpaceProgress struct {
-	total     atomic.Int64 // Expected total tasks for this space
-	completed atomic.Int64 // Completed tasks for this space
+	total     atomic.Int32 // Expected total tasks for this space
+	completed atomic.Int32 // Completed tasks for this space
 }
 
 // BatchPool manages concurrent batch processing using a worker pool pattern
 type BatchPool struct {
-	maxWorkers     int
-	statusChecker  func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
-	taskQueue      chan Task
-	workersWg      sync.WaitGroup // Waits for worker goroutines to finish on Close
-	overallWg      sync.WaitGroup // Waits for all submitted tasks to complete processing
-	stopOnce       sync.Once
-	shutdown       chan struct{}
-	progress       sync.Map // Stores map[string]*SpaceProgress for per-space tracking
-	mu             sync.Mutex
-	notFoundErrors map[string]NotFoundErrorInfo
-	totalLen       int            // Max length of total count string across all spaces for formatting
-	cfg            *config.Config // Add config field
+	maxWorkers    int
+	statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
+	taskQueue     chan Task
+	workersWg     sync.WaitGroup // Waits for worker goroutines to finish on Close
+	overallWg     sync.WaitGroup // Waits for all submitted tasks to complete processing
+	stopOnce      sync.Once
+	shutdown      chan struct{}
+	progress      sync.Map // Stores map[string]*SpaceProgress for per-space tracking
+	mu            sync.Mutex
+	totalLen      int            // Max length of total count string across all spaces for formatting
+	cfg           *config.Config // Add config field
 }
 
 // NewBatchPool creates a new batch processing pool
@@ -63,12 +54,11 @@ func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.
 	}
 
 	bp := &BatchPool{
-		maxWorkers:     maxWorkers,
-		statusChecker:  statusChecker,
-		taskQueue:      make(chan Task, queueSize),
-		shutdown:       make(chan struct{}),
-		notFoundErrors: make(map[string]NotFoundErrorInfo),
-		cfg:            cfg, // Store config
+		maxWorkers:    maxWorkers,
+		statusChecker: statusChecker,
+		taskQueue:     make(chan Task, queueSize),
+		shutdown:      make(chan struct{}),
+		cfg:           cfg, // Store config
 		// progress is initialized implicitly by sync.Map
 	}
 
@@ -166,12 +156,6 @@ func (bp *BatchPool) monitorBatch(task Task) {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					log.Printf("[CANCELLED] %s - %s Monitoring cancelled or timed out internally: %v", progressStr, logPrefix, err)
 					// Let the outer context timeout handle the final state
-				} else if err.Error() == "unexpected status code: 404" {
-					log.Printf("[NOT FOUND] %s - %s", progressStr, logPrefix)
-					bp.recordNotFoundError(task.Op.DifyID, task.SpaceKey, task.ConfluenceID, task.Title, task.Op.DatasetID) // Pass datasetID if needed
-					bp.markTaskComplete(task.SpaceKey)
-					taskCompleted = true
-					return
 				} else {
 					log.Printf("[ERROR] %s - %s Failed status check: %v. Retrying...", progressStr, logPrefix, err)
 					// Continue loop to retry
@@ -247,7 +231,8 @@ func (bp *BatchPool) SetTotal(spaceKey string, total int) {
 	sp := val.(*SpaceProgress)
 
 	// Store the total atomically
-	sp.total.Store(int64(total))
+	sp.total.Store(int32(total))
+	sp.completed.Store(0) // Reset completed count
 
 	// Update max total length for formatting (protected by mutex)
 	bp.mu.Lock()
@@ -275,36 +260,6 @@ func (bp *BatchPool) ProgressString(spaceKey string) string {
 
 	// Use max length for alignment
 	return fmt.Sprintf("%*d/%*d", tLen, completed, tLen, total)
-}
-
-// recordNotFoundError logs 404 error details thread-safely
-func (bp *BatchPool) recordNotFoundError(difyID, spaceKey, confluenceID, title, datasetID string) {
-	bp.mu.Lock()
-	defer bp.mu.Unlock()
-	bp.notFoundErrors[difyID] = NotFoundErrorInfo{
-		DatasetID:    datasetID, // Store datasetID
-		SpaceKey:     spaceKey,
-		ConfluenceID: confluenceID,
-		Title:        title,
-	}
-}
-
-// LogNotFoundErrors outputs all recorded 404 errors thread-safely
-func (bp *BatchPool) LogNotFoundErrors() {
-	bp.mu.Lock()
-	defer bp.mu.Unlock() // Ensure unlock happens even if logging panics
-
-	if len(bp.notFoundErrors) == 0 {
-		log.Println("No '404 Not Found' errors were recorded during execution.")
-		return
-	}
-
-	log.Println("--- Documents Not Found (404 Errors) ---")
-	for difyID, info := range bp.notFoundErrors {
-		log.Printf("DifyID: %s, DatasetID: %s, SpaceKey: %s, ConfluenceID: %s, Title: %s",
-			difyID, info.DatasetID, info.SpaceKey, info.ConfluenceID, info.Title)
-	}
-	log.Println("----------------------------------------")
 }
 
 // Wait blocks until all submitted tasks have been processed by the workers.

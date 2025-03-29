@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strings" // Import the strings package
 	"time"
 
 	"github.com/step-chen/dify-atlassian-go/internal/config"
@@ -17,17 +18,35 @@ import (
 
 // Client handles communication with the Dify API
 type Client struct {
-	baseURL    string               // API endpoint base URL
-	apiKey     string               // Decrypted API key for authentication
-	datasetID  string               // Target dataset ID for operations
-	httpClient *http.Client         // HTTP client with default timeout
-	config     *config.Config       // Application configuration
-	meta       map[string]MetaField // Metadata fields mapping
+	baseURL     string               // API endpoint base URL
+	apiKey      string               // Decrypted API key for authentication
+	datasetID   string               // Target dataset ID for operations
+	httpClient  *http.Client         // HTTP client with default timeout
+	config      *config.Config       // Application configuration
+	meta        map[string]MetaField // map[metaName]MetaField
+	metaMapping map[string]string    // Metadata map[difyID]confluenceIDs(split with ",")
 }
 
 // DatasetID returns the configured dataset ID for this client
 func (c *Client) DatasetID() string {
 	return c.datasetID
+}
+
+// GetConfluenceIDsForDifyID retrieves the stored comma-separated Confluence IDs for a given Dify document ID.
+func (c *Client) GetConfluenceIDsForDifyID(difyID string) string {
+	// Ensure metaMapping is initialized before accessing
+	if c.metaMapping == nil {
+		c.metaMapping = make(map[string]string) // Or log an error if it should always be initialized
+	}
+	return c.metaMapping[difyID] // Returns "" if key doesn't exist
+}
+
+// SetMetaMapping updates the internal mapping for a given Dify ID.
+func (c *Client) SetMetaMapping(difyID, confluenceIDs string) {
+	if c.metaMapping == nil {
+		c.metaMapping = make(map[string]string)
+	}
+	c.metaMapping[difyID] = confluenceIDs
 }
 
 // NewClient initializes a new Dify API client
@@ -44,11 +63,12 @@ func NewClient(baseURL, apiKey, datasetID string, cfg *config.Config) (*Client, 
 	}
 
 	return &Client{
-		baseURL:    baseURL,
-		apiKey:     decryptedKey,
-		datasetID:  datasetID,
-		httpClient: &http.Client{},
-		config:     cfg,
+		baseURL:     baseURL,
+		apiKey:      decryptedKey,
+		datasetID:   datasetID,
+		httpClient:  &http.Client{},
+		config:      cfg,
+		metaMapping: make(map[string]string), // Initialize metaMapping
 	}, nil
 }
 
@@ -271,9 +291,19 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, e
 				}
 			}
 			if idValue != "" {
-				allDocuments[idValue] = DocumentInfo{
-					DifyID: doc.ID,
-					When:   whenValue,
+				// Store the mapping from Dify ID to Confluence IDs
+				c.metaMapping[doc.ID] = idValue
+
+				// Split the comma-separated IDs for allDocuments map (maps Confluence ID -> Dify Info)
+				ids := strings.Split(idValue, ",")
+				for _, id := range ids {
+					trimmedID := strings.TrimSpace(id)
+					if trimmedID != "" {
+						allDocuments[trimmedID] = DocumentInfo{
+							DifyID: doc.ID,
+							When:   whenValue,
+						}
+					}
 				}
 			}
 		}
@@ -354,31 +384,108 @@ func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateD
 	return &response, nil
 }
 
-// DeleteDocument removes document from dataset
-// ctx: Context for request cancellation
-// documentID: ID of document to delete
-// Returns error if deletion fails
-func (c *Client) DeleteDocument(documentID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// DeleteDocument handles removing a Confluence ID association from a Dify document.
+// If the document is associated with multiple Confluence IDs, it only updates the metadata.
+// If it's the last associated Confluence ID, it deletes the Dify document entirely.
+// documentID: The Dify document ID.
+// confluenceIDToRemove: The specific Confluence ID to disassociate.
+// Returns error if the operation fails.
+func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
+	existingIDsStr := c.GetConfluenceIDsForDifyID(documentID)
+	if existingIDsStr == "" {
+		// If there's no mapping, maybe the document was already deleted or never mapped?
+		// Attempt deletion anyway, or log a warning. Let's try deleting.
+		log.Printf("Warning: No Confluence ID mapping found for Dify document %s during deletion attempt for Confluence ID %s. Attempting direct deletion.", documentID, confluenceIDToRemove)
+		// Fall through to actual deletion logic below.
+	}
+
+	existingIDs := strings.Split(existingIDsStr, ",")
+	remainingIDs := []string{}
+	found := false
+
+	for _, id := range existingIDs {
+		trimmedID := strings.TrimSpace(id)
+		if trimmedID == confluenceIDToRemove {
+			found = true // Mark that we found the ID to remove
+		} else if trimmedID != "" {
+			remainingIDs = append(remainingIDs, trimmedID) // Keep other valid IDs
+		}
+	}
+
+	// If the ID to remove wasn't even in the list, log warning and maybe still delete?
+	if !found && existingIDsStr != "" {
+		log.Printf("Warning: Confluence ID %s not found in metadata for Dify document %s (%s). Proceeding with potential deletion.", confluenceIDToRemove, documentID, existingIDsStr)
+		// Decide if we should still delete. Let's assume yes for now.
+	}
+
+	// If there are other IDs remaining after removal
+	if len(remainingIDs) > 0 {
+		log.Printf("Dify document %s has other associated Confluence IDs. Updating metadata instead of deleting.", documentID)
+		newIDsStr := strings.Join(remainingIDs, ",")
+		c.SetMetaMapping(documentID, newIDsStr) // Update internal map
+
+		// Prepare metadata update request for Dify API
+		metaIDFieldID := c.GetMetaID("id")
+		if metaIDFieldID == "" {
+			// This should not happen if InitMetadata ran correctly
+			return fmt.Errorf("critical error: metadata field 'id' not found in client config for dataset %s", c.datasetID)
+		}
+
+		updateReq := UpdateDocumentMetadataRequest{
+			OperationData: []DocumentOperation{
+				{
+					DocumentID: documentID,
+					MetadataList: []DocumentMetadata{
+						{
+							ID:    metaIDFieldID, // Use the actual field ID from config
+							Name:  "id",          // Name is likely informational here, ID matters
+							Value: newIDsStr,
+						},
+					},
+				},
+			},
+		}
+		// Call the existing UpdateDocumentMetadata function (from meta.go)
+		err := c.UpdateDocumentMetadata(updateReq)
+		if err != nil {
+			log.Printf("Failed to update metadata for Dify document %s after removing Confluence ID %s: %v", documentID, confluenceIDToRemove, err)
+			// Rollback internal map? Or just return error? Let's return error.
+			// c.SetMetaMapping(documentID, existingIDsStr) // Optional rollback
+			return fmt.Errorf("failed to update metadata for document %s: %w", documentID, err)
+		}
+		log.Printf("Successfully updated metadata for Dify document %s, removed association with Confluence ID %s.", documentID, confluenceIDToRemove)
+		return nil // Metadata updated, no deletion needed
+	}
+
+	// --- If no IDs remain, proceed with actual deletion ---
+	log.Printf("Confluence ID %s is the last association for Dify document %s. Proceeding with deletion.", confluenceIDToRemove, documentID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // Increased timeout slightly
 	defer cancel()
 
 	url := fmt.Sprintf("%s/datasets/%s/documents/%s", c.baseURL, c.datasetID, documentID)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create delete request for %s: %w", documentID, err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return fmt.Errorf("failed to send delete request for %s: %w", documentID, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent { // Allow 204 No Content as success
+		// Attempt to read the error body
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyString := string(bodyBytes)
+		log.Printf("Document deletion failed. Status: %d, Body: %s", resp.StatusCode, bodyString)
+		return fmt.Errorf("unexpected status code %d during deletion of %s. Body: %s", resp.StatusCode, documentID, bodyString)
 	}
 
+	// Successfully deleted, remove from internal map
+	delete(c.metaMapping, documentID)
+	log.Printf("Successfully deleted Dify document %s.", documentID)
 	return nil
 }
