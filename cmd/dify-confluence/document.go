@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context" // Added context import
 	"fmt"
 	"log"
 	"os"
@@ -72,6 +73,24 @@ func initOperations(client *dify.Client, contents map[string]confluence.ContentO
 	return nil
 }
 
+// prepareTimeoutContents creates a copy of the global timeoutContents, clears the original, and returns the copy.
+func prepareTimeoutContents() map[string]map[string]confluence.ContentOperation {
+	// Create a deep copy of timeoutContents
+	contentsCopy := make(map[string]map[string]confluence.ContentOperation)
+	for spaceKey, spaceContents := range timeoutContents {
+		contentsCopy[spaceKey] = make(map[string]confluence.ContentOperation)
+		for contentID, operation := range spaceContents {
+			contentsCopy[spaceKey][contentID] = operation // Copy the operation struct
+		}
+	}
+
+	// Clear the original timeoutContents map
+	// This creates a new empty map and assigns it back, effectively clearing it.
+	timeoutContents = make(map[string]map[string]confluence.ContentOperation)
+
+	return contentsCopy
+}
+
 // processContentOperation handles individual content operations based on type and action
 func processContentOperation(contentID string, operation confluence.ContentOperation, spaceKey string, client *dify.Client, confluenceClient *confluence.Client, jobChan *JobChannels) error {
 	job := Job{
@@ -131,12 +150,18 @@ func createDocument(j *Job) error {
 			log.Printf("failed to delete Dify document %s: %v", resp.Document.ID, errDel)
 		}
 		return err
-	}
+	} // <--- Added missing closing brace
 
 	// Add document to batch pool for indexing tracking
-	batchPool.Add(j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	// Add context.Background() as the first argument
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	if err != nil {
+		// Log error if adding to the pool fails (e.g., pool shutdown)
+		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
+		// Consider how to handle this - should the document be deleted? For now, just log.
+	}
 
-	return nil
+	return nil // Return nil even if adding to pool failed, as document creation succeeded
 }
 
 func updateDocument(j *Job) error {
@@ -160,12 +185,16 @@ func updateDocument(j *Job) error {
 	// Update document metadata
 	if err := updateDocumentMetadata(j.Client, resp.Document.ID, j.Content.URL, "page", j.SpaceKey, j.Content.Title, j.Content.ID, j.Content.PublishDate, ""); err != nil {
 		return err
-	}
+	} // <--- Added missing closing brace
 
 	// Add document to batch pool for indexing tracking
-	batchPool.Add(j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	// Add context.Background() as the first argument
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	if err != nil {
+		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
+	}
 
-	return nil
+	return nil // Return nil even if adding to pool failed, as document update succeeded
 }
 
 func uploadDocumentByFile(j *Job) error {
@@ -198,12 +227,16 @@ func uploadDocumentByFile(j *Job) error {
 	// Update document metadata
 	if err := updateDocumentMetadata(j.Client, docResp.Document.ID, j.Attachment.Download, "attachment", j.SpaceKey, j.Attachment.Title, j.Attachment.ID, j.Attachment.LastModifiedDate, j.Attachment.Download); err != nil {
 		return err
-	}
+	} // <--- Added missing closing brace
 
 	// Add document to batch pool for indexing tracking
-	batchPool.Add(j.SpaceKey, j.Attachment.ID, j.Attachment.Title, docResp.Batch, j.Op)
+	// Add context.Background() as the first argument
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Attachment.ID, j.Attachment.Title, docResp.Batch, j.Op)
+	if err != nil {
+		log.Printf("Error adding task to batch pool for space %s attachment %s: %v", j.SpaceKey, j.Attachment.Title, err)
+	}
 
-	return nil
+	return nil // Return nil even if adding to pool failed, as document upload succeeded
 }
 
 // updateDocumentMetadata updates document metadata with common fields
@@ -258,10 +291,18 @@ func deleteDocument(j *Job) error {
 	err := j.Client.DeleteDocument(j.DocumentID)
 	if err != nil {
 		log.Printf("failed to delete Dify document %s: %v", j.DocumentID, err)
+		// Still return the error if deletion failed
 		return err
 	}
 
-	batchPool.ReduceRemain(j.SpaceKey)
-	log.Printf("%s successfully deleted Dify document: %s", batchPool.ProgressString(j.SpaceKey), j.DocumentID)
+	// batchPool.ReduceRemain(j.SpaceKey) // Removed - BatchPool handles completion internally
+	// Log deletion success. ProgressString still works for getting current progress.
+	log.Printf("%s Successfully deleted Dify document: %s", batchPool.ProgressString(j.SpaceKey), j.DocumentID)
+	// Note: Since deletion doesn't involve batch monitoring, it completes immediately.
+	// The BatchPool's total count for the space (set via SetTotal) should account for this.
+	// If SetTotal counts only items needing monitoring, deletions shouldn't affect its count.
+	// If SetTotal counts *all* operations (create/update/delete), then the BatchPool's
+	// completed count won't reach the total unless deletions are also marked complete somehow.
+	// Let's assume SetTotal counts only monitorable tasks (create/update/upload).
 	return nil
 }

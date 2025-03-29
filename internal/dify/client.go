@@ -216,8 +216,9 @@ func (c *Client) CreateDocumentByFile(filePath string, req *CreateDocumentByFile
 // limit: Number of items per page (max 100)
 // Returns map of document info or error
 type DocumentInfo struct {
-	DifyID string
-	When   string
+	DifyID         string
+	When           string
+	IndexingStatus string
 }
 
 func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, error) {

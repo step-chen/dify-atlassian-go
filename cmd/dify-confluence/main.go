@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -16,7 +17,8 @@ import (
 var (
 	difyClients     map[string]*dify.Client
 	batchPool       *concurrency.BatchPool
-	timeoutContents map[string]map[string]confluence.ContentOperation // Stores IDs of timeout documents and their space keys
+	timeoutContents map[string]map[string]confluence.ContentOperation // Stores map[spaceKey]map[contentID]confluence.ContentOperation
+	timeoutMutex    sync.Mutex                                        // Mutex for protecting timeoutContents
 	cfg             *config.Config                                    // Global configuration
 )
 
@@ -36,7 +38,9 @@ func main() {
 	timeoutContents = make(map[string]map[string]confluence.ContentOperation)
 
 	// Init batch pool
-	batchPool = concurrency.NewBatchPool(cfg.Concurrency.BatchPoolSize, statusChecker)
+	// Use BatchPoolSize for max workers, QueueSize for the internal task queue
+	// Pass the loaded config (cfg) to the constructor
+	batchPool = concurrency.NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, cfg)
 
 	// Init Dify clients per space
 	difyClients = make(map[string]*dify.Client)
@@ -86,89 +90,104 @@ func main() {
 		}
 	}
 
-	wg.Wait()
-	retries := 0
-	for retries < cfg.Concurrency.MaxRetries && len(timeoutContents) > 0 {
-		cfg.Concurrency.IndexingTimeout += cfg.Concurrency.IndexingTimeout
-		if err := processTimeoutContents(confluenceClient, &jobChannels); err != nil {
-			log.Printf("error processing timeout documents (attempt %d/%d): %v",
-				retries+1, cfg.Concurrency.MaxRetries, err)
+	// Now, wait for all submitted batch monitoring tasks from the initial run to complete
+	// The job channel will be closed later, after potential retry jobs are submitted.
+	log.Println("Waiting for initial batch monitoring tasks to complete...")
+	batchPool.Wait()
+	log.Println("Initial batch monitoring complete.")
+
+	// Retry processing timed out contents up to MaxRetries times
+	for i := 0; i < cfg.Concurrency.MaxRetries; i++ {
+		cfg.Concurrency.IndexingTimeout = (i + 2) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
+		log.Printf("Retry attempt %d/%d for timed out documents...", i+1, cfg.Concurrency.MaxRetries)
+		processTimedOutContents(difyClients, confluenceClient, &jobChannels)
+
+		// Wait for batch monitoring tasks submitted during this retry attempt to complete
+		log.Printf("Waiting for batch monitoring tasks from retry attempt %d to complete...", i+1)
+		batchPool.Wait()
+		log.Printf("Batch monitoring tasks from retry attempt %d complete.", i+1)
+
+		// Check if there are still timed out contents after processing and waiting
+		timeoutMutex.Lock()
+		remainingTimeouts := len(timeoutContents)
+		timeoutMutex.Unlock()
+
+		if remainingTimeouts == 0 {
+			log.Println("No more timed out documents to retry.")
+			break // Exit loop if no more timeouts
 		}
-		retries++
-		wg.Wait()
-	}
-	if len(timeoutContents) > 0 {
-		log.Printf("failed to process all timeout documents after %d attempts",
-			cfg.Concurrency.MaxRetries)
+		log.Printf("Found %d remaining timed out documents after attempt %d. Continuing retry if attempts remain.", remainingTimeouts, i+1)
 	}
 
+	// Close the job channel *after* submitting initial jobs AND all retry jobs
+	log.Println("Closing job channel...")
 	close(jobChannels.Jobs)
-	wg.Wait()
 
-	// Log failed types
+	// Wait for all worker goroutines to finish processing ALL jobs (initial + retries)
+	log.Println("Waiting for all workers to complete...")
+	wg.Wait()
+	log.Println("All workers finished.")
+
+	// Log failed types (remains unchanged)
 	utils.WriteFailedTypesLog()
 
-	// Handle timeout documents
-	if len(timeoutContents) > 0 {
-		retries := 0
-		for retries < cfg.Concurrency.MaxRetries && len(timeoutContents) > 0 {
-			wg.Wait() // Wait for all jobs to complete before next retry
-			if err := processTimeoutContents(confluenceClient, &jobChannels); err != nil {
-				log.Printf("error processing timeout documents (attempt %d/%d): %v",
-					retries+1, cfg.Concurrency.MaxRetries, err)
-			}
-			retries++
-		}
-		if len(timeoutContents) > 0 {
-			log.Printf("failed to process all timeout documents after %d attempts",
-				cfg.Concurrency.MaxRetries)
-		}
-	}
-
-	// Log 404 errors from status check
+	// Log 404 errors recorded by the batch pool (remains unchanged)
 	batchPool.LogNotFoundErrors()
+
+	// Close the batch pool gracefully
+	batchPool.Close()
+
+	log.Println("Processing complete.")
 }
 
-// Handle timeout documents via processContentOperation
-func processTimeoutContents(confluenceClient *confluence.Client, jobChan *JobChannels) error {
-	// Create a copy of space keys to safely iterate
-	spaceKeys := make([]string, 0, len(timeoutContents))
-	for spaceKey := range timeoutContents {
-		spaceKeys = append(spaceKeys, spaceKey)
+// processTimedOutContents handles the logic for retrying documents that timed out during indexing.
+func processTimedOutContents(difyClients map[string]*dify.Client, confluenceClient *confluence.Client, jobChannels *JobChannels) {
+	log.Println("Checking for timed out documents to retry...")
+	var copiedTimeoutContents map[string]map[string]confluence.ContentOperation
+
+	timeoutMutex.Lock() // Lock before checking and copying timeoutContents
+	if len(timeoutContents) > 0 {
+		log.Printf("Found %d spaces with timed out documents. Preparing for retry.", len(timeoutContents))
+		copiedTimeoutContents = prepareTimeoutContents() // Copies and clears the global map
+	} else {
+		log.Println("No timed out documents found needing retry.")
 	}
+	timeoutMutex.Unlock() // Unlock after check and copy/clear
 
-	for _, spaceKey := range spaceKeys {
-		contents := timeoutContents[spaceKey]
-		client, exists := difyClients[spaceKey]
-		if !exists {
-			return fmt.Errorf("no Dify client for space %s", spaceKey)
-		}
-
-		// Create a copy of content IDs to safely iterate
-		contentIDs := make([]string, 0, len(contents))
-		for contentID := range contents {
-			contentIDs = append(contentIDs, contentID)
-		}
-
-		for _, contentID := range contentIDs {
-			operation := contents[contentID]
-			if err := processContentOperation(contentID, operation, spaceKey, client, confluenceClient, jobChan); err != nil {
-				return fmt.Errorf("failed to process timeout document %s: %w", contentID, err)
+	// Process the copied timed-out items outside the lock
+	if len(copiedTimeoutContents) > 0 {
+		log.Println("Submitting retry jobs for timed out documents...")
+		for spaceKey, spaceContents := range copiedTimeoutContents {
+			client, exists := difyClients[spaceKey]
+			if !exists {
+				log.Printf("Error processing retry: No Dify client found for space %s. Skipping.", spaceKey)
+				continue
 			}
-			// Remove successfully processed content
-			delete(contents, contentID)
+			for contentID, operation := range spaceContents {
+				log.Printf("Retrying content %s in space %s", contentID, spaceKey)
+				// Ensure jobChannels is passed correctly as a pointer
+				if err := processContentOperation(contentID, operation, spaceKey, client, confluenceClient, jobChannels); err != nil {
+					// Log error but continue processing other retries
+					log.Printf("Error submitting retry job for content %s in space %s: %v", contentID, spaceKey, err)
+				}
+			}
 		}
-
-		// If all contents for this space are processed, remove the space entry
-		if len(contents) == 0 {
-			delete(timeoutContents, spaceKey)
-		}
+		log.Println("Finished submitting retry jobs for timed out documents.")
 	}
-	return nil
 }
 
 // Check batch status using Dify client
-func statusChecker(spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error) {
+// This function is passed to the BatchPool and runs within its workers.
+// It now receives a context from the BatchPool.
+func statusChecker(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error) {
+	// Check for context cancellation first (from BatchPool's task timeout or global shutdown)
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err() // Propagate context error
+	default:
+		// Proceed with status check if context is not done
+	}
+
 	client, exists := difyClients[spaceKey]
 	if !exists {
 		return "", fmt.Errorf("no Dify client for space %s", spaceKey)
@@ -192,15 +211,21 @@ func statusChecker(spaceKey, confluenceID, title, batch string, op confluence.Co
 			}
 
 			// Store and log the ID
-			if op.Action == 1 {
-				op.Action = 0
+			if op.Action == 0 {
+				op.Action = 1
 			}
+			// Store the ID for retry using mutex
+			timeoutMutex.Lock()
 			if timeoutContents[spaceKey] == nil {
 				timeoutContents[spaceKey] = make(map[string]confluence.ContentOperation)
 			}
-			timeoutContents[spaceKey][status.Data[0].ID] = op
+			if status.Data[0].ID != "" {
+				op.DifyID = status.Data[0].ID
+			}
+			timeoutContents[spaceKey][confluenceID] = op
+			timeoutMutex.Unlock()
 
-			return "deleted", nil
+			return "deleted", nil // Marked as deleted, will be retried later
 		}
 		return status.Data[0].IndexingStatus, nil
 	}
