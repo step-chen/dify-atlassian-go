@@ -81,12 +81,13 @@ type SubchunkSegmentationRule struct {
 // IndexingTimeout: Document indexing timeout (minutes)
 // MaxRetries: Maximum retry attempts for failed documents
 type ConcurrencyConfig struct {
-	Enabled         bool `yaml:"enabled"`          // Whether concurrency is enabled
-	Workers         int  `yaml:"workers"`          // Number of concurrent workers
-	QueueSize       int  `yaml:"queue_size"`       // Size of the processing queue
-	BatchPoolSize   int  `yaml:"batch_pool_size"`  // Maximum number of batches in the global pool
-	IndexingTimeout int  `yaml:"indexing_timeout"` // Timeout for document indexing (in minutes)
-	MaxRetries      int  `yaml:"max_retries"`      // Maximum number of retries for timeout documents
+	Enabled              bool `yaml:"enabled"`                // Whether concurrency is enabled
+	Workers              int  `yaml:"workers"`                // Number of concurrent workers
+	QueueSize            int  `yaml:"queue_size"`             // Size of the processing queue
+	BatchPoolSize        int  `yaml:"batch_pool_size"`        // Maximum number of batches in the global pool
+	IndexingTimeout      int  `yaml:"indexing_timeout"`       // Timeout for document indexing (in minutes)
+	MaxRetries           int  `yaml:"max_retries"`            // Maximum number of retries for timeout documents
+	DeleteTimeoutContent bool `yaml:"delete_timeout_content"` // Whether to delete timeout content
 }
 
 // DifyConfig contains Dify API integration settings

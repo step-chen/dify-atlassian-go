@@ -39,28 +39,33 @@ func processSpace(spaceKey string, client *dify.Client, confluenceClient *conflu
 }
 
 func initOperations(client *dify.Client, contents map[string]confluence.ContentOperation) error {
-	docMetas, err := client.FetchDocumentsList(0, 100)
+	// FetchDocumentsList now returns map[confluenceID]DifyDocumentMetadataRecord
+	// and populates client.metaMapping internally (map[difyID]DifyDocumentMetadataRecord)
+	confluenceIDToDifyRecord, err := client.FetchDocumentsList(0, 100)
 	if err != nil {
-		return fmt.Errorf("failed to list documents for dataset: %s: %v", client.DatasetID(), err)
+		return fmt.Errorf("failed to list documents for dataset %s: %v", client.DatasetID(), err)
 	}
 
-	for contentID, doc := range docMetas {
+	// Iterate over the fetched records (keyed by Confluence ID)
+	for contentID, record := range confluenceIDToDifyRecord {
 		if op, ok := contents[contentID]; !ok {
 			// Add new operation for unmapped content
 			contents[contentID] = confluence.ContentOperation{
 				Action:    2, // Delete
-				DifyID:    doc.DifyID,
+				DifyID:    record.DifyID,
 				DatasetID: client.DatasetID(),
 			}
 		} else {
 			// Update existing operation
-			op.DifyID = doc.DifyID
+			op.DifyID = record.DifyID
 			op.DatasetID = client.DatasetID()
 
-			// Compare times using utility function
-			equal, err := utils.CompareRFC3339Times(op.LastModifiedDate, doc.When)
+			// Compare times using utility function (Confluence op vs Dify record)
+			equal, err := utils.CompareRFC3339Times(op.LastModifiedDate, record.When)
 			if err != nil {
-				return fmt.Errorf("failed to compare times: %w", err)
+				fmt.Printf("failed to compare times: %s\n", err.Error())
+				equal = false
+				//return fmt.Errorf("failed to compare times: %w", err)
 			}
 
 			// Determine action based on time comparison
@@ -228,75 +233,143 @@ func uploadDocumentByFile(j *Job) error {
 	return nil // Return nil even if adding to pool failed, as document upload succeeded
 }
 
-// updateDocumentMetadata updates document metadata with common fields
-func updateDocumentMetadata(client *dify.Client, documentID, url, docType, spaceKey, title, id, timestamp, download string) error {
-	metadata := []dify.DocumentMetadata{}
-	if client.GetMetaID("url") != "" && url != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("url"), Name: "url", Value: url})
+// Helper to add metadata if the field is configured and the value is not empty
+func addMetadataIfValid(client *dify.Client, metadataList *[]dify.DocumentMetadata, fieldName, value string) {
+	metaID := client.GetMetaID(fieldName)
+	if metaID != "" && value != "" {
+		*metadataList = append(*metadataList, dify.DocumentMetadata{ID: metaID, Name: fieldName, Value: value})
 	}
-	if client.GetMetaID("source_type") != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("source_type"), Name: "source_type", Value: "confluence"})
+}
+
+// Helper to calculate the final string of Confluence IDs
+func calculateFinalConfluenceIDs(client *dify.Client, documentID, newConfluenceID string) string {
+	metaIDFieldID := client.GetMetaID("id")
+	currentRecord, recordExists := client.GetDocumentMetadataRecord(documentID)
+	existingIDsStr := ""
+	if recordExists {
+		existingIDsStr = currentRecord.ConfluenceIDs
 	}
-	if client.GetMetaID("type") != "" && docType != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("type"), Name: "type", Value: docType})
+
+	// If the 'id' field isn't configured in Dify, we can't update it via API,
+	// but we still need to manage it internally.
+	if metaIDFieldID == "" {
+		if newConfluenceID != "" {
+			// If new ID provided, merge it internally even if not sending via API
+			if existingIDsStr == "" {
+				return newConfluenceID
+			}
+			existingIDs := strings.Split(existingIDsStr, ",")
+			trimmedNewID := strings.TrimSpace(newConfluenceID)
+			idExists := false
+			for _, existingID := range existingIDs {
+				if strings.TrimSpace(existingID) == trimmedNewID {
+					idExists = true
+					break
+				}
+			}
+			if !idExists {
+				return existingIDsStr + "," + trimmedNewID
+			}
+		}
+		// If no new ID or it already exists, return the existing string
+		return existingIDsStr
 	}
-	if client.GetMetaID("space_key") != "" && spaceKey != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("space_key"), Name: "space_key", Value: spaceKey})
-	}
-	if client.GetMetaID("title") != "" && title != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("title"), Name: "title", Value: title})
-	}
-	// Handle 'id' metadata update logic
-	if metaID := client.GetMetaID("id"); metaID != "" && id != "" {
-		existingIDsStr := client.GetConfluenceIDsForDifyID(documentID)
+
+	// If 'id' field *is* configured:
+	if newConfluenceID != "" {
+		trimmedNewID := strings.TrimSpace(newConfluenceID)
+		if existingIDsStr == "" {
+			return trimmedNewID // First ID
+		}
+
 		existingIDs := strings.Split(existingIDsStr, ",")
 		idExists := false
-		trimmedNewID := strings.TrimSpace(id)
-
 		for _, existingID := range existingIDs {
 			if strings.TrimSpace(existingID) == trimmedNewID {
 				idExists = true
 				break
 			}
 		}
-
-		finalIDValue := existingIDsStr
 		if !idExists {
-			if existingIDsStr == "" {
-				finalIDValue = trimmedNewID // First ID
-			} else {
-				finalIDValue = existingIDsStr + "," + trimmedNewID // Append new ID
-			}
-			// Update the mapping in the client instance as well
-			client.SetMetaMapping(documentID, finalIDValue)
+			return existingIDsStr + "," + trimmedNewID // Append new ID
 		}
-		// Always append the metadata, using the potentially updated finalIDValue
-		metadata = append(metadata, dify.DocumentMetadata{ID: metaID, Name: "id", Value: finalIDValue})
-	}
-	if client.GetMetaID("when") != "" && timestamp != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("when"), Name: "when", Value: timestamp})
-	}
-	if client.GetMetaID("download") != "" && download != "" {
-		metadata = append(metadata, dify.DocumentMetadata{ID: client.GetMetaID("download"), Name: "download", Value: download})
-	}
-	if len(metadata) == 0 {
-		log.Printf("no metadata to update for Dify document %s", documentID)
-		return nil
-	}
-	updateMetadataRequest := dify.UpdateDocumentMetadataRequest{
-		OperationData: []dify.DocumentOperation{
-			{
-				DocumentID:   documentID,
-				MetadataList: metadata,
-			},
-		},
+		// ID already exists
+		return existingIDsStr
 	}
 
-	if err := client.UpdateDocumentMetadata(updateMetadataRequest); err != nil {
-		log.Printf("failed to update metadata for Dify document %s: %v", documentID, err)
-		return err
+	// If newConfluenceID is empty, return the existing value (might be empty too)
+	return existingIDsStr
+}
+
+// updateDocumentMetadata updates document metadata in Dify API and stores the full record in the client.
+func updateDocumentMetadata(client *dify.Client, documentID, url, docType, spaceKey, title, confluenceID, timestamp, download string) error {
+	// 1. Prepare metadata for API call
+	metadataToUpdate := []dify.DocumentMetadata{}
+	addMetadataIfValid(client, &metadataToUpdate, "url", url)
+	addMetadataIfValid(client, &metadataToUpdate, "source_type", "confluence") // Always set source_type
+	addMetadataIfValid(client, &metadataToUpdate, "type", docType)
+	addMetadataIfValid(client, &metadataToUpdate, "space_key", spaceKey)
+	addMetadataIfValid(client, &metadataToUpdate, "title", title)
+	addMetadataIfValid(client, &metadataToUpdate, "when", timestamp)
+	addMetadataIfValid(client, &metadataToUpdate, "download", download)
+
+	// 2. Calculate final Confluence IDs and add to API payload if 'id' field is configured
+	finalConfluenceIDsValue := calculateFinalConfluenceIDs(client, documentID, confluenceID)
+	metaIDFieldID := client.GetMetaID("id")
+	if metaIDFieldID != "" && finalConfluenceIDsValue != "" {
+		// Only add to API call if the field is configured and there's a value
+		metadataToUpdate = append(metadataToUpdate, dify.DocumentMetadata{ID: metaIDFieldID, Name: "id", Value: finalConfluenceIDsValue})
 	}
-	return nil
+
+	// 3. Perform the API call if there's anything to update
+	if len(metadataToUpdate) > 0 {
+		updateMetadataRequest := dify.UpdateDocumentMetadataRequest{
+			OperationData: []dify.DocumentOperation{
+				{
+					DocumentID:   documentID,
+					MetadataList: metadataToUpdate,
+				},
+			},
+		}
+		if err := client.UpdateDocumentMetadata(updateMetadataRequest); err != nil {
+			log.Printf("failed to update metadata via API for Dify document %s: %v", documentID, err)
+			return fmt.Errorf("failed to update Dify metadata via API: %w", err) // Return wrapped error
+		}
+	} else {
+		log.Printf("No metadata fields configured or provided for API update for Dify document %s", documentID)
+	}
+
+	// 4. Update the client's internal record *after* successful API call (or if no call needed)
+	recordToStore, _ := client.GetDocumentMetadataRecord(documentID) // Get existing or zero-value struct
+
+	// Update fields based on input parameters, ensuring DifyID is always set
+	recordToStore.DifyID = documentID
+	if url != "" {
+		recordToStore.URL = url
+	}
+	recordToStore.SourceType = "confluence" // Always update internal record
+	if docType != "" {
+		recordToStore.Type = docType
+	}
+	if spaceKey != "" {
+		recordToStore.SpaceKey = spaceKey
+	}
+	if title != "" {
+		recordToStore.Title = title
+	}
+	// Use the calculated final value for internal storage too
+	recordToStore.ConfluenceIDs = finalConfluenceIDsValue
+	if timestamp != "" {
+		recordToStore.When = timestamp
+	}
+	if download != "" {
+		recordToStore.Download = download
+	}
+
+	// Store the updated/new record in the client
+	client.SetDocumentMetadataRecord(documentID, recordToStore)
+
+	return nil // Success
 }
 
 func deleteDocument(j *Job) error {

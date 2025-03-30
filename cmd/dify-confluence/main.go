@@ -146,30 +146,36 @@ func statusChecker(ctx context.Context, spaceKey, confluenceID, title, batch str
 		// Check if ProcessingStartedAt is more than 2 minutes ago
 		if time.Since(op.StartAt) > time.Duration(cfg.Concurrency.IndexingTimeout)*time.Minute {
 			fmt.Println("timeout:", op.StartAt, time.Since(op.StartAt), time.Now())
-			// Delete the document or update metadata
-			// Pass the confluenceID which is a parameter of statusChecker
-			err := client.DeleteDocument(status.Data[0].ID, confluenceID)
-			if err != nil {
-				// Error message updated to reflect potential metadata update failure too
-				return "", fmt.Errorf("failed to delete/update timeout document %s for %s content %s: %w", status.Data[0].ID, spaceKey, title, err)
-			}
 
-			// Store and log the ID
-			if op.Action == 0 {
-				op.Action = 1
-			}
-			// Store the ID for retry using mutex
-			timeoutMutex.Lock()
-			if timeoutContents[spaceKey] == nil {
-				timeoutContents[spaceKey] = make(map[string]confluence.ContentOperation)
-			}
-			if status.Data[0].ID != "" {
-				op.DifyID = status.Data[0].ID
-			}
-			timeoutContents[spaceKey][confluenceID] = op
-			timeoutMutex.Unlock()
+			if cfg.Concurrency.DeleteTimeoutContent {
+				// Delete the document or update metadata if configured to do so
+				// Pass the confluenceID which is a parameter of statusChecker
+				err := client.DeleteDocument(status.Data[0].ID, confluenceID)
+				if err != nil {
+					// Error message updated to reflect potential metadata update failure too
+					return "", fmt.Errorf("failed to delete/update timeout document %s for %s content %s: %w", status.Data[0].ID, spaceKey, title, err)
+				}
 
-			return "deleted", nil // Marked as deleted, will be retried later
+				// Store and log the ID for retry
+				if op.Action == 0 {
+					op.Action = 1 // Mark as needing retry (deletion happened)
+				}
+				timeoutMutex.Lock()
+				if timeoutContents[spaceKey] == nil {
+					timeoutContents[spaceKey] = make(map[string]confluence.ContentOperation)
+				}
+				if status.Data[0].ID != "" {
+					op.DifyID = status.Data[0].ID
+				}
+				timeoutContents[spaceKey][confluenceID] = op
+				timeoutMutex.Unlock()
+
+				return "deleted", nil // Marked as deleted, will be retried later
+			} else {
+				// If not configured to delete, simply mark as completed and don't retry
+				log.Printf("Indexing timed out for %s (%s), but configured not to delete. Marking as completed.", title, confluenceID)
+				return "completed", nil
+			}
 		}
 		return status.Data[0].IndexingStatus, nil
 	}

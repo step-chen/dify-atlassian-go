@@ -97,27 +97,10 @@ func DefaultProcessRule(cfg *config.Config) config.ProcessRule {
 // Batch: Processing batch ID
 type CreateDocumentResponse struct {
 	Document struct {
-		ID                   string                 `json:"id"`                      // Document ID
-		Position             int                    `json:"position"`                // Document position
-		DataSourceType       string                 `json:"data_source_type"`        // Data source type
-		DataSourceInfo       map[string]interface{} `json:"data_source_info"`        // Data source information
-		DataSourceDetailDict map[string]interface{} `json:"data_source_detail_dict"` // Detailed data source information
-		DatasetProcessRuleID string                 `json:"dataset_process_rule_id"` // Dataset processing rule ID
-		Name                 string                 `json:"name"`                    // Document name
-		CreatedFrom          string                 `json:"created_from"`            // Source of document creation
-		CreatedBy            string                 `json:"created_by"`              // Creator of the document
-		CreatedAt            int64                  `json:"created_at"`              // Creation timestamp
-		Tokens               int                    `json:"tokens"`                  // Number of tokens
-		IndexingStatus       string                 `json:"indexing_status"`         // Current indexing status
-		Error                interface{}            `json:"error"`                   // Any error that occurred
-		Enabled              bool                   `json:"enabled"`                 // Whether the document is enabled
-		DisabledAt           interface{}            `json:"disabled_at"`             // Timestamp when disabled
-		DisabledBy           interface{}            `json:"disabled_by"`             // Who disabled the document
-		Archived             bool                   `json:"archived"`                // Whether the document is archived
-		DisplayStatus        string                 `json:"display_status"`          // Display status
-		WordCount            int                    `json:"word_count"`              // Word count
-		HitCount             int                    `json:"hit_count"`               // Number of hits
-		DocForm              string                 `json:"doc_form"`                // Document format
+		ID             string      `json:"id"`              // Document ID
+		Name           string      `json:"name"`            // Document name
+		IndexingStatus string      `json:"indexing_status"` // Current indexing status
+		Error          interface{} `json:"error"`           // Any error that occurred
 	} `json:"document"`
 	Batch string `json:"batch"` // Batch ID for the document creation
 }
@@ -169,4 +152,18 @@ type DocumentListResponse struct {
 	Total   int  `json:"total"`
 	HasMore bool `json:"has_more"`
 	Page    int  `json:"page"`
+}
+
+// DifyDocumentMetadataRecord holds the metadata associated with a Dify document,
+// primarily linking it back to its Confluence source(s).
+type DifyDocumentMetadataRecord struct {
+	URL           string // Confluence URL (page or attachment download link)
+	SourceType    string // Always "confluence" for this application
+	Type          string // "page" or "attachment"
+	SpaceKey      string // Confluence space key
+	Title         string // Confluence page or attachment title
+	ConfluenceIDs string // Comma-separated list of associated Confluence content IDs
+	When          string // Last modified timestamp (RFC3339 format) from Confluence
+	Download      string // Specific download link for attachments
+	DifyID        string // The corresponding Dify document ID (redundant with map key, but useful)
 }

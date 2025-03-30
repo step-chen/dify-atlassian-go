@@ -18,13 +18,13 @@ import (
 
 // Client handles communication with the Dify API
 type Client struct {
-	baseURL     string               // API endpoint base URL
-	apiKey      string               // Decrypted API key for authentication
-	datasetID   string               // Target dataset ID for operations
-	httpClient  *http.Client         // HTTP client with default timeout
-	config      *config.Config       // Application configuration
-	meta        map[string]MetaField // map[metaName]MetaField
-	metaMapping map[string]string    // Metadata map[difyID]confluenceIDs(split with ",")
+	baseURL     string                                // API endpoint base URL
+	apiKey      string                                // Decrypted API key for authentication
+	datasetID   string                                // Target dataset ID for operations
+	httpClient  *http.Client                          // HTTP client with default timeout
+	config      *config.Config                        // Application configuration
+	meta        map[string]MetaField                  // map[metaName]MetaField
+	metaMapping map[string]DifyDocumentMetadataRecord // Metadata map[difyID]DifyDocumentMetadataRecord
 }
 
 // DatasetID returns the configured dataset ID for this client
@@ -32,21 +32,33 @@ func (c *Client) DatasetID() string {
 	return c.datasetID
 }
 
-// GetConfluenceIDsForDifyID retrieves the stored comma-separated Confluence IDs for a given Dify document ID.
-func (c *Client) GetConfluenceIDsForDifyID(difyID string) string {
+// GetDocumentMetadataRecord retrieves the stored metadata record for a given Dify document ID.
+func (c *Client) GetDocumentMetadataRecord(difyID string) (DifyDocumentMetadataRecord, bool) {
 	// Ensure metaMapping is initialized before accessing
 	if c.metaMapping == nil {
-		c.metaMapping = make(map[string]string) // Or log an error if it should always be initialized
+		c.metaMapping = make(map[string]DifyDocumentMetadataRecord) // Or log an error if it should always be initialized
 	}
-	return c.metaMapping[difyID] // Returns "" if key doesn't exist
+	record, exists := c.metaMapping[difyID]
+	return record, exists
 }
 
-// SetMetaMapping updates the internal mapping for a given Dify ID.
-func (c *Client) SetMetaMapping(difyID, confluenceIDs string) {
-	if c.metaMapping == nil {
-		c.metaMapping = make(map[string]string)
+// GetConfluenceIDsForDifyID retrieves the stored comma-separated Confluence IDs from the metadata record for a given Dify document ID.
+func (c *Client) GetConfluenceIDsForDifyID(difyID string) string {
+	record, exists := c.GetDocumentMetadataRecord(difyID)
+	if !exists {
+		return ""
 	}
-	c.metaMapping[difyID] = confluenceIDs
+	return record.ConfluenceIDs // Returns "" if key doesn't exist or record has no IDs
+}
+
+// SetDocumentMetadataRecord updates the internal metadata record for a given Dify ID.
+func (c *Client) SetDocumentMetadataRecord(difyID string, record DifyDocumentMetadataRecord) {
+	if c.metaMapping == nil {
+		c.metaMapping = make(map[string]DifyDocumentMetadataRecord)
+	}
+	// Ensure the DifyID within the record matches the key
+	record.DifyID = difyID
+	c.metaMapping[difyID] = record
 }
 
 // NewClient initializes a new Dify API client
@@ -68,7 +80,7 @@ func NewClient(baseURL, apiKey, datasetID string, cfg *config.Config) (*Client, 
 		datasetID:   datasetID,
 		httpClient:  &http.Client{},
 		config:      cfg,
-		metaMapping: make(map[string]string), // Initialize metaMapping
+		metaMapping: make(map[string]DifyDocumentMetadataRecord), // Initialize metaMapping
 	}, nil
 }
 
@@ -231,21 +243,17 @@ func (c *Client) CreateDocumentByFile(filePath string, req *CreateDocumentByFile
 	return &response, nil
 }
 
-// FetchDocumentsList retrieves paginated document list
+// FetchDocumentsList retrieves paginated document list and populates the internal metaMapping.
+// It returns a map where the key is the Confluence Content ID and the value is the DifyDocumentMetadataRecord.
 // page: Starting page number (0-based)
 // limit: Number of items per page (max 100)
-// Returns map of document info or error
-type DocumentInfo struct {
-	DifyID         string
-	When           string
-	IndexingStatus string
-}
-
-func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, error) {
+// Returns map[confluenceID]DifyDocumentMetadataRecord or error
+func (c *Client) FetchDocumentsList(page, limit int) (map[string]DifyDocumentMetadataRecord, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	allDocuments := make(map[string]DocumentInfo)
+	// This map will be returned, mapping Confluence ID -> Dify Metadata Record
+	confluenceIDToDifyRecord := make(map[string]DifyDocumentMetadataRecord)
 
 	if page < 0 {
 		page = 0
@@ -282,27 +290,39 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, e
 		}
 
 		for _, doc := range response.Data {
-			var idValue, whenValue string
+			var confluenceIDs, whenValue string
+			// Extract 'id' (Confluence IDs) and 'when' from metadata
 			for _, meta := range doc.DocMetadata {
+				// Assuming the metadata field for Confluence IDs is named 'id'
 				if meta.Name == "id" {
-					idValue = meta.Value
+					confluenceIDs = meta.Value
 				} else if meta.Name == "when" {
 					whenValue = meta.Value
 				}
+				// TODO: Potentially extract other fields like url, type, space_key, title, download if they are stored in Dify metadata
 			}
-			if idValue != "" {
-				// Store the mapping from Dify ID to Confluence IDs
-				c.metaMapping[doc.ID] = idValue
 
-				// Split the comma-separated IDs for allDocuments map (maps Confluence ID -> Dify Info)
-				ids := strings.Split(idValue, ",")
+			if confluenceIDs != "" {
+				// Create the metadata record for this Dify document
+				record := DifyDocumentMetadataRecord{
+					DifyID:        doc.ID,
+					ConfluenceIDs: confluenceIDs,
+					When:          whenValue,
+					// Initialize other fields if available from metadata or leave empty
+				}
+
+				// Store the full record in the client's internal map (Dify ID -> Record)
+				c.SetDocumentMetadataRecord(doc.ID, record)
+
+				// Populate the return map (Confluence ID -> Record)
+				ids := strings.Split(confluenceIDs, ",")
 				for _, id := range ids {
 					trimmedID := strings.TrimSpace(id)
 					if trimmedID != "" {
-						allDocuments[trimmedID] = DocumentInfo{
-							DifyID: doc.ID,
-							When:   whenValue,
-						}
+						// If multiple Confluence IDs map to the same Dify ID,
+						// this will overwrite previous entries for the same Confluence ID.
+						// This assumes a Confluence ID maps to only one Dify document.
+						confluenceIDToDifyRecord[trimmedID] = record
 					}
 				}
 			}
@@ -315,7 +335,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentInfo, e
 		page++
 	}
 
-	return allDocuments, nil
+	return confluenceIDToDifyRecord, nil
 }
 
 // UpdateDocumentByText modifies existing document content
@@ -391,15 +411,15 @@ func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateD
 // confluenceIDToRemove: The specific Confluence ID to disassociate.
 // Returns error if the operation fails.
 func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
-	existingIDsStr := c.GetConfluenceIDsForDifyID(documentID)
-	if existingIDsStr == "" {
+	record, exists := c.GetDocumentMetadataRecord(documentID)
+	if !exists {
 		// If there's no mapping, maybe the document was already deleted or never mapped?
 		// Attempt deletion anyway, or log a warning. Let's try deleting.
-		log.Printf("Warning: No Confluence ID mapping found for Dify document %s during deletion attempt for Confluence ID %s. Attempting direct deletion.", documentID, confluenceIDToRemove)
+		log.Printf("Warning: No metadata record found for Dify document %s during deletion attempt for Confluence ID %s. Attempting direct deletion.", documentID, confluenceIDToRemove)
 		// Fall through to actual deletion logic below.
 	}
 
-	existingIDs := strings.Split(existingIDsStr, ",")
+	existingIDs := strings.Split(record.ConfluenceIDs, ",")
 	remainingIDs := []string{}
 	found := false
 
@@ -413,8 +433,8 @@ func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
 	}
 
 	// If the ID to remove wasn't even in the list, log warning and maybe still delete?
-	if !found && existingIDsStr != "" {
-		log.Printf("Warning: Confluence ID %s not found in metadata for Dify document %s (%s). Proceeding with potential deletion.", confluenceIDToRemove, documentID, existingIDsStr)
+	if !found && record.ConfluenceIDs != "" { // Check if ConfluenceIDs was actually populated
+		log.Printf("Warning: Confluence ID %s not found in metadata record for Dify document %s (%s). Proceeding with potential deletion.", confluenceIDToRemove, documentID, record.ConfluenceIDs)
 		// Decide if we should still delete. Let's assume yes for now.
 	}
 
@@ -422,38 +442,81 @@ func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
 	if len(remainingIDs) > 0 {
 		log.Printf("Dify document %s has other associated Confluence IDs. Updating metadata instead of deleting.", documentID)
 		newIDsStr := strings.Join(remainingIDs, ",")
-		c.SetMetaMapping(documentID, newIDsStr) // Update internal map
+
+		// Update the record in the client's internal map first
+		updatedRecord := record // Make a copy to modify
+		updatedRecord.ConfluenceIDs = newIDsStr
+		c.SetDocumentMetadataRecord(documentID, updatedRecord) // Update internal map
 
 		// Prepare metadata update request for Dify API
-		metaIDFieldID := c.GetMetaID("id")
+		metaIDFieldID := c.GetMetaID("id") // Get the Dify Field ID for the 'id' metadata
 		if metaIDFieldID == "" {
 			// This should not happen if InitMetadata ran correctly
 			return fmt.Errorf("critical error: metadata field 'id' not found in client config for dataset %s", c.datasetID)
 		}
 
+		// Prepare the list of metadata fields to update, mirroring updateDocumentMetadata logic
+		metadataToUpdate := []DocumentMetadata{}
+
+		// Helper function to add metadata if valid
+		addMeta := func(fieldName, value string) {
+			fieldID := c.GetMetaID(fieldName)
+			if fieldID != "" && value != "" {
+				metadataToUpdate = append(metadataToUpdate, DocumentMetadata{ID: fieldID, Name: fieldName, Value: value})
+			} else if fieldID == "" {
+				// Log if a field from the record exists but isn't configured in Dify meta
+				// This helps diagnose potential configuration mismatches.
+				// Only log if the value is not empty, otherwise it's just an unused field.
+				if value != "" {
+					log.Printf("Warning: Metadata field '%s' has value in record but is not configured in Dify meta for dataset %s. Skipping update for this field.", fieldName, c.datasetID)
+				}
+			}
+		}
+
+		// Add 'id' field (always attempt if configured)
+		if metaIDFieldID != "" {
+			metadataToUpdate = append(metadataToUpdate, DocumentMetadata{ID: metaIDFieldID, Name: "id", Value: newIDsStr})
+		} else {
+			// This case is handled by the error check above, but included for completeness
+			log.Printf("Critical Error: Metadata field 'id' not configured. Cannot update remaining IDs.")
+			// The error is already returned above.
+		}
+
+		// Add other fields based on the existing record
+		addMeta("url", record.URL)
+		addMeta("source_type", "confluence") // Always try to set source_type if configured
+		addMeta("type", record.Type)
+		addMeta("space_key", record.SpaceKey)
+		addMeta("title", record.Title)
+		addMeta("when", record.When)
+		addMeta("download", record.Download)
+
+		// Only proceed if there's actually metadata to update (at least 'id' should be there if configured)
+		if len(metadataToUpdate) == 0 {
+			log.Printf("Warning: No configured metadata fields to update for Dify document %s after removing Confluence ID %s. This might indicate a configuration issue.", documentID, confluenceIDToRemove)
+			// Decide if this is an error or just a warning. Let's treat as warning for now.
+			// We still updated the internal map, so return nil.
+			return nil
+		}
+
 		updateReq := UpdateDocumentMetadataRequest{
 			OperationData: []DocumentOperation{
 				{
-					DocumentID: documentID,
-					MetadataList: []DocumentMetadata{
-						{
-							ID:    metaIDFieldID, // Use the actual field ID from config
-							Name:  "id",          // Name is likely informational here, ID matters
-							Value: newIDsStr,
-						},
-					},
+					DocumentID:   documentID,
+					MetadataList: metadataToUpdate, // Use the constructed list
 				},
 			},
 		}
-		// Call the existing UpdateDocumentMetadata function (from meta.go)
+
+		// Call the existing UpdateDocumentMetadata function
 		err := c.UpdateDocumentMetadata(updateReq)
 		if err != nil {
 			log.Printf("Failed to update metadata for Dify document %s after removing Confluence ID %s: %v", documentID, confluenceIDToRemove, err)
 			// Rollback internal map? Or just return error? Let's return error.
-			// c.SetMetaMapping(documentID, existingIDsStr) // Optional rollback
+			// Rollback the change in the internal map
+			c.SetDocumentMetadataRecord(documentID, record) // Restore original record
 			return fmt.Errorf("failed to update metadata for document %s: %w", documentID, err)
 		}
-		log.Printf("Successfully updated metadata for Dify document %s, removed association with Confluence ID %s.", documentID, confluenceIDToRemove)
 		return nil // Metadata updated, no deletion needed
 	}
 

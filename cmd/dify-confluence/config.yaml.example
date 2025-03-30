@@ -1,46 +1,51 @@
 # Confluence configuration
 confluence:
-  # Base URL of the Confluence instance
-  base_url: https://your-confluence-instance.com
-  # API key for Confluence authentication
-  api_key: your-confluence-api-key
-  # List of space keys to process
+  # Base URL of the Confluence instance (e.g., https://your-domain.atlassian.net/wiki)
+  base_url: https://your-domain.atlassian.net/wiki
+  # API key for Confluence authentication (generate from your Atlassian account)
+  api_key: YOUR_CONFLUENCE_API_KEY
+  # List of space keys to process (e.g., ["SPACE1", "SPACE2"])
   space_keys:
     - YOUR_SPACE_KEY
 
 # Concurrency configuration
 concurrency:
-  # Whether concurrency is enabled
+  # Whether concurrency is enabled (true/false)
   enabled: true
-  # Number of concurrent content workers
-  workers: 5
+  # Number of concurrent content workers (adjust based on system resources)
+  workers: 4
   # Size of the content processing queue
-  queue_size: 5
+  queue_size: 100
   # Maximum number of batches in the global pool
-  batch_pool_size: 10
+  batch_pool_size: 20
   # Timeout for document indexing (in minutes)
-  indexing_timeout: 5
+  indexing_timeout: 10
   # Maximum number of retries for timeout documents
-  max_retries: 10
+  max_retries: 3
+  # Whether to delete the document in Dify if indexing times out (true/false)
+  delete_timeout_content: false
 
 # Dify configuration
 dify:
-  # Base URL of the Dify API
-  base_url: http://your-dify-instance.com/v1
-  # API key for Dify authentication
-  api_key: your-dify-api-key
-  # Mapping of space keys to dataset IDs
+  # Base URL of the Dify API (e.g., https://api.dify.ai/v1)
+  base_url: https://api.dify.ai/v1
+  # API key for Dify authentication (generate from your Dify account)
+  api_key: YOUR_DIFY_API_KEY
+  # Mapping of space keys to dataset IDs (find dataset IDs in Dify)
+  # Example:
+  # datasets:
+  #   YOUR_SPACE_KEY: YOUR_DIFY_DATASET_ID
+  #   ANOTHER_SPACE: ANOTHER_DATASET_ID
   datasets:
-    YOUR_SPACE_KEY_1: your-dataset-id_1
-    YOUR_SPACE_KEY_2: your-dataset-id_2
+    YOUR_SPACE_KEY: YOUR_DIFY_DATASET_ID
   rag_setting:
     # Document indexing technique (high_quality, economy)
     indexing_technique: high_quality
-    # Document form (hierarchical_model, qa_model, text_model)  
+    # Document form (hierarchical_model, qa_model, text_model)
     doc_form: hierarchical_model
     # Process rules configuration
     process_rule:
-      mode: custom
+      mode: custom # or 'automatic'
       rules:
         pre_processing_rules:
           - id: remove_extra_spaces
@@ -50,13 +55,14 @@ dify:
         segmentation:
           separator: "\n"
           max_tokens: 500
+        # Parent mode for hierarchical segmentation (paragraph, etc.)
         parent_mode: paragraph
         subchunk_segmentation:
           separator: "***"
           max_tokens: 500
           chunk_overlap: 150
 
-# Allowed media types for attachments
+# Allowed media types for attachments (set to true to allow)
 allowed_types:
   text/plain: true
   text/markdown: true
@@ -67,8 +73,11 @@ allowed_types:
   application/vnd.ms-excel: true
   application/vnd.openxmlformats-officedocument.wordprocessingml.document: true
   text/csv: true
+  #application/vnd.oasis.opendocument.text: true
+  #application/vnd.oasis.opendocument.spreadsheet: true
 
-# Unsupported media types that will be skipped during processing
+# Unsupported media types that will be skipped during processing (set to true to skip)
+# Add or remove types as needed
 unsupported_types:
   application/octet-stream: true
   application/x-msdownload: true
@@ -87,10 +96,11 @@ unsupported_types:
   application/vnd.oasis.opendocument.spreadsheet: true
   application/vnd.oasis.opendocument.presentation: true
   application/vnd.oasis.opendocument.graphics: true
+  application/msword: true # Older .doc format, might be better handled by specific converters if needed
   text/xml: true
   application/xml: true
   image/svg+xml: true
-  application/vnd.jgraph.mxfile: true
+  application/vnd.jgraph.mxfile: true # Draw.io files
   video/quicktime: true
   video/mp4: true
   video/webm: true
