@@ -14,7 +14,6 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 )
 
-// Task represents a batch monitoring task (same as before)
 type Task struct {
 	SpaceKey     string
 	ConfluenceID string
@@ -23,13 +22,11 @@ type Task struct {
 	Op           confluence.ContentOperation
 }
 
-// SpaceProgress stores atomic progress counters for a specific spaceKey
 type SpaceProgress struct {
 	total     atomic.Int32 // Expected total tasks for this space
 	completed atomic.Int32 // Completed tasks for this space
 }
 
-// BatchPool manages concurrent batch processing using a worker pool pattern
 type BatchPool struct {
 	maxWorkers    int
 	statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
@@ -44,7 +41,6 @@ type BatchPool struct {
 	cfg           *config.Config // Add config field
 }
 
-// NewBatchPool creates a new batch processing pool
 func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error), cfg *config.Config) *BatchPool { // Add cfg parameter
 	if maxWorkers <= 0 {
 		maxWorkers = 1
@@ -70,7 +66,6 @@ func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.
 	return bp
 }
 
-// worker runs in a goroutine, processing tasks from the taskQueue
 func (bp *BatchPool) worker() {
 	defer bp.workersWg.Done()
 	for {
@@ -87,8 +82,6 @@ func (bp *BatchPool) worker() {
 	}
 }
 
-// Add submits a new batch task to the pool for monitoring
-// IMPORTANT: Call SetTotal for the relevant spaceKey *before* adding tasks for it.
 func (bp *BatchPool) Add(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) error {
 	task := Task{
 		SpaceKey:     spaceKey,
@@ -98,10 +91,7 @@ func (bp *BatchPool) Add(ctx context.Context, spaceKey, confluenceID, title, bat
 		Op:           op,
 	}
 
-	// Ensure progress entry exists (SetTotal should have been called)
 	if _, ok := bp.progress.Load(spaceKey); !ok {
-		// Log or handle this strictly? For now, log a warning.
-		// Consider returning an error if SetTotal is mandatory before Add.
 		log.Printf("Warning: Adding task for spaceKey '%s' before SetTotal was called. Progress tracking might be inaccurate.", spaceKey)
 		// Optionally create a default progress entry here if desired:
 		// bp.progress.LoadOrStore(spaceKey, &SpaceProgress{})
@@ -121,9 +111,7 @@ func (bp *BatchPool) Add(ctx context.Context, spaceKey, confluenceID, title, bat
 	}
 }
 
-// monitorBatch performs the actual status checking for a task
 func (bp *BatchPool) monitorBatch(task Task) {
-	// Use timeout from config
 	taskTimeout := time.Duration(bp.cfg.Concurrency.IndexingTimeout) * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout)
 	defer cancel()
@@ -137,10 +125,8 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	taskCompleted := false // Flag to ensure completion logic runs only once
 
 	defer func() {
-		// Ensure completion is marked even if panic or unexpected exit occurs
-		// Although the main paths should handle this.
 		if !taskCompleted {
-			bp.markTaskComplete(task.SpaceKey)
+			bp.MarkTaskComplete(task.SpaceKey)
 			log.Printf("%s - Monitoring ended unexpectedly.", logPrefix)
 		}
 	}()
@@ -162,18 +148,18 @@ func (bp *BatchPool) monitorBatch(task Task) {
 				}
 			} else {
 				if status == "completed" {
-					bp.markTaskComplete(task.SpaceKey) // Mark first
+					bp.MarkTaskComplete(task.SpaceKey) // Mark first
 					taskCompleted = true
 					// Read updated progress for logging
 					log.Printf("[SUCCESS] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
 					return
 				} else if status == "deleted" {
-					bp.markTaskComplete(task.SpaceKey) // Mark first
+					bp.MarkTaskComplete(task.SpaceKey) // Mark first
 					taskCompleted = true
 					log.Printf("[DELETED] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
 					return
 				} else if status == "failed" { // Handle explicit failure status
-					bp.markTaskComplete(task.SpaceKey) // Mark first
+					bp.MarkTaskComplete(task.SpaceKey) // Mark first
 					taskCompleted = true
 					log.Printf("[FAILED] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
 					// Optionally record this failure differently than 404
@@ -184,16 +170,14 @@ func (bp *BatchPool) monitorBatch(task Task) {
 			}
 
 		case <-ctx.Done():
-			// Task monitoring timeout or context cancelled externally
 			if !taskCompleted { // Check if not already completed by status check
-				bp.markTaskComplete(task.SpaceKey)
+				bp.MarkTaskComplete(task.SpaceKey)
 				taskCompleted = true
 				log.Printf("[TIMEOUT] %s - %s Monitoring timed out.", bp.ProgressString(task.SpaceKey), logPrefix)
 			}
 			return
 
 		case <-bp.shutdown:
-			// Pool is shutting down globally
 			if !taskCompleted {
 				// Task is aborted. Decide if aborted tasks should count towards completion.
 				// Typically, they might not, so we might *not* call markTaskComplete here.
@@ -205,11 +189,9 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	}
 }
 
-// markTaskComplete atomically increments the completed count for the spaceKey.
-func (bp *BatchPool) markTaskComplete(spaceKey string) {
+func (bp *BatchPool) MarkTaskComplete(spaceKey string) {
 	val, ok := bp.progress.Load(spaceKey)
 	if !ok {
-		// This case should ideally not happen if SetTotal was called.
 		log.Printf("Error: Progress entry for spaceKey '%s' not found during completion.", spaceKey)
 		// Consider creating a default entry on the fly if needed:
 		// val, _ = bp.progress.LoadOrStore(spaceKey, &SpaceProgress{})
@@ -219,22 +201,17 @@ func (bp *BatchPool) markTaskComplete(spaceKey string) {
 	sp.completed.Add(1)
 }
 
-// SetTotal configures the expected total operations count for a given spaceKey.
-// Call this *before* adding tasks for the spaceKey for accurate progress tracking.
 func (bp *BatchPool) SetTotal(spaceKey string, total int) {
 	if total < 0 {
 		total = 0
 	}
 
-	// Get or create the progress tracker for this space
 	val, _ := bp.progress.LoadOrStore(spaceKey, &SpaceProgress{})
 	sp := val.(*SpaceProgress)
 
-	// Store the total atomically
 	sp.total.Store(int32(total))
 	sp.completed.Store(0) // Reset completed count
 
-	// Update max total length for formatting (protected by mutex)
 	bp.mu.Lock()
 	totalStr := strconv.Itoa(total)
 	if len(totalStr) > bp.totalLen {
@@ -243,7 +220,6 @@ func (bp *BatchPool) SetTotal(spaceKey string, total int) {
 	bp.mu.Unlock()
 }
 
-// ProgressString formats the progress for a specific spaceKey.
 func (bp *BatchPool) ProgressString(spaceKey string) string {
 	val, ok := bp.progress.Load(spaceKey)
 	if !ok {
@@ -262,14 +238,10 @@ func (bp *BatchPool) ProgressString(spaceKey string) string {
 	return fmt.Sprintf("%*d/%*d", tLen, completed, tLen, total)
 }
 
-// Wait blocks until all submitted tasks have been processed by the workers.
-// Call this after adding all tasks.
 func (bp *BatchPool) Wait() {
 	bp.overallWg.Wait()
 }
 
-// Close gracefully shuts down the batch pool.
-// Stops accepting new tasks and waits for current tasks and workers to finish.
 func (bp *BatchPool) Close() {
 	bp.stopOnce.Do(func() {
 		log.Println("Shutting down batch pool...")

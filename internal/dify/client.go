@@ -7,68 +7,55 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net/http"
-	"os"
 	"strings" // Import the strings package
+	"sync"
 	"time"
 
 	"github.com/step-chen/dify-atlassian-go/internal/config"
 )
 
-// Client handles communication with the Dify API
 type Client struct {
-	baseURL     string                                // API endpoint base URL
-	apiKey      string                                // Decrypted API key for authentication
-	datasetID   string                                // Target dataset ID for operations
-	httpClient  *http.Client                          // HTTP client with default timeout
-	config      *config.Config                        // Application configuration
-	meta        map[string]MetaField                  // map[metaName]MetaField
-	metaMapping map[string]DifyDocumentMetadataRecord // Metadata map[difyID]DifyDocumentMetadataRecord
+	baseURL     string
+	apiKey      string
+	datasetID   string
+	httpClient  *http.Client
+	config      *config.Config
+	meta        map[string]MetaField              // map[metaName]MetaField
+	metaMapping map[string]DocumentMetadataRecord // Metadata map[difyID]DocumentMetadataRecord
+	hashMapping map[string]string                 // map[xxh3]difyID
+	hashMutex   sync.RWMutex                      // Protects hashMapping
 }
 
-// DatasetID returns the configured dataset ID for this client
 func (c *Client) DatasetID() string {
 	return c.datasetID
 }
 
-// GetDocumentMetadataRecord retrieves the stored metadata record for a given Dify document ID.
-func (c *Client) GetDocumentMetadataRecord(difyID string) (DifyDocumentMetadataRecord, bool) {
-	// Ensure metaMapping is initialized before accessing
+func (c *Client) GetDocumentMetadataRecord(difyID string) (DocumentMetadataRecord, bool) {
 	if c.metaMapping == nil {
-		c.metaMapping = make(map[string]DifyDocumentMetadataRecord) // Or log an error if it should always be initialized
+		c.metaMapping = make(map[string]DocumentMetadataRecord)
 	}
 	record, exists := c.metaMapping[difyID]
 	return record, exists
 }
 
-// GetConfluenceIDsForDifyID retrieves the stored comma-separated Confluence IDs from the metadata record for a given Dify document ID.
-func (c *Client) GetConfluenceIDsForDifyID(difyID string) string {
+func (c *Client) IsExistsForDifyID(difyID, confluenceID string) bool {
 	record, exists := c.GetDocumentMetadataRecord(difyID)
 	if !exists {
-		return ""
+		return false
 	}
-	return record.ConfluenceIDs // Returns "" if key doesn't exist or record has no IDs
+
+	// Check if the confluenceID exists in the record's ConfluenceIDs
+	ids := strings.Split(record.ConfluenceIDs, ",")
+	for _, id := range ids {
+		if strings.TrimSpace(id) == confluenceID {
+			return true
+		}
+	}
+	return false
 }
 
-// SetDocumentMetadataRecord updates the internal metadata record for a given Dify ID.
-func (c *Client) SetDocumentMetadataRecord(difyID string, record DifyDocumentMetadataRecord) {
-	if c.metaMapping == nil {
-		c.metaMapping = make(map[string]DifyDocumentMetadataRecord)
-	}
-	// Ensure the DifyID within the record matches the key
-	record.DifyID = difyID
-	c.metaMapping[difyID] = record
-}
-
-// NewClient initializes a new Dify API client
-// baseURL: API endpoint URL
-// apiKey: Encrypted API key
-// datasetID: Target dataset ID
-// cfg: Application configuration
-// Returns initialized client or error
 func NewClient(baseURL, apiKey, datasetID string, cfg *config.Config) (*Client, error) {
-	// Decrypt API Key
 	decryptedKey, err := config.Decrypt(apiKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt API key: %w", err)
@@ -80,15 +67,10 @@ func NewClient(baseURL, apiKey, datasetID string, cfg *config.Config) (*Client, 
 		datasetID:   datasetID,
 		httpClient:  &http.Client{},
 		config:      cfg,
-		metaMapping: make(map[string]DifyDocumentMetadataRecord), // Initialize metaMapping
+		metaMapping: make(map[string]DocumentMetadataRecord), // Initialize metaMapping
 	}, nil
 }
 
-// GetIndexingStatus checks document indexing progress
-// ctx: Context for request cancellation
-// spaceKey: Target space identifier
-// batch: Batch ID to check status for
-// Returns indexing status details or error
 func (c *Client) GetIndexingStatus(spaceKey, batch string) (*IndexingStatusResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -109,6 +91,9 @@ func (c *Client) GetIndexingStatus(spaceKey, batch string) (*IndexingStatusRespo
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.datasetID, url)
+		log.Printf("error response: %s", string(body))
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -120,10 +105,6 @@ func (c *Client) GetIndexingStatus(spaceKey, batch string) (*IndexingStatusRespo
 	return &statusResponse, nil
 }
 
-// CreateDocumentByText creates document from text content
-// ctx: Context for request cancellation
-// req: Document creation request details
-// Returns creation response or error
 func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
@@ -133,7 +114,7 @@ func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocume
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	// Create context with 2 minute timeout to prevent hanging
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel() // Ensure context is canceled to release resources
 
@@ -153,7 +134,9 @@ func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocume
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
 		log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.datasetID, url)
+		log.Printf("error respone: %s", string(body))
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -165,95 +148,11 @@ func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocume
 	return &response, nil
 }
 
-// CreateDocumentByFile creates document from file upload
-// ctx: Context for request cancellation
-// filePath: Path to source file
-// req: Document creation request details
-// title: Document title
-// Returns creation response or error
-func (c *Client) CreateDocumentByFile(filePath string, req *CreateDocumentByFileRequest, title string) (*CreateDocumentResponse, error) {
-	if req.ProcessRule.Mode == "" {
-		req.ProcessRule = DefaultProcessRule(c.config)
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w, path: %s", err, filePath)
-	}
-	defer file.Close()
-
-	var requestBody bytes.Buffer
-	writer := multipart.NewWriter(&requestBody)
-
-	dataJSON, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal data: %w", err)
-	}
-
-	jsonPart, err := writer.CreateFormField("data")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create data field: %w", err)
-	}
-
-	if _, err = jsonPart.Write(dataJSON); err != nil {
-		return nil, fmt.Errorf("failed to write data field: %w", err)
-	}
-
-	filePart, err := writer.CreateFormFile("file", title)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create form file: %w", err)
-	}
-
-	if _, err := io.Copy(filePart, file); err != nil {
-		return nil, fmt.Errorf("failed to copy file content: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	url := fmt.Sprintf("%s/datasets/%s/document/create-by-file", c.baseURL, c.datasetID)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, &requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("unexpected status code: %d, datasetID: %s, title: %s, url: %s", resp.StatusCode, c.datasetID, title, url)
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	var response CreateDocumentResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &response, nil
-}
-
-// FetchDocumentsList retrieves paginated document list and populates the internal metaMapping.
-// It returns a map where the key is the Confluence Content ID and the value is the DifyDocumentMetadataRecord.
-// page: Starting page number (0-based)
-// limit: Number of items per page (max 100)
-// Returns map[confluenceID]DifyDocumentMetadataRecord or error
-func (c *Client) FetchDocumentsList(page, limit int) (map[string]DifyDocumentMetadataRecord, error) {
+func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadataRecord, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// This map will be returned, mapping Confluence ID -> Dify Metadata Record
-	confluenceIDToDifyRecord := make(map[string]DifyDocumentMetadataRecord)
+	confluenceIDToDifyRecord := make(map[string]DocumentMetadataRecord)
 
 	if page < 0 {
 		page = 0
@@ -279,8 +178,10 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DifyDocumentMet
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
 			log.Printf("unexpected status code: %d, datasetID: %s, page: %d, limit: %d, url: %s",
 				resp.StatusCode, c.datasetID, page, limit, url)
+			log.Printf("error response: %s", string(body))
 			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 
@@ -290,26 +191,25 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DifyDocumentMet
 		}
 
 		for _, doc := range response.Data {
-			var confluenceIDs, whenValue string
-			// Extract 'id' (Confluence IDs) and 'when' from metadata
+			var confluenceIDs, whenVal, xxh3Val string
 			for _, meta := range doc.DocMetadata {
-				// Assuming the metadata field for Confluence IDs is named 'id'
 				if meta.Name == "id" {
 					confluenceIDs = meta.Value
 				} else if meta.Name == "when" {
-					whenValue = meta.Value
+					whenVal = meta.Value
+				} else if meta.Name == "xxh3" {
+					xxh3Val = meta.Value
 				}
-				// TODO: Potentially extract other fields like url, type, space_key, title, download if they are stored in Dify metadata
 			}
 
 			if confluenceIDs != "" {
-				// Create the metadata record for this Dify document
-				record := DifyDocumentMetadataRecord{
+				record := DocumentMetadataRecord{
 					DifyID:        doc.ID,
 					ConfluenceIDs: confluenceIDs,
-					When:          whenValue,
-					// Initialize other fields if available from metadata or leave empty
+					When:          whenVal,
+					Xxh3:          xxh3Val,
 				}
+				c.SetHashMapping(xxh3Val, doc.ID)
 
 				// Store the full record in the client's internal map (Dify ID -> Record)
 				c.SetDocumentMetadataRecord(doc.ID, record)
@@ -319,9 +219,6 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DifyDocumentMet
 				for _, id := range ids {
 					trimmedID := strings.TrimSpace(id)
 					if trimmedID != "" {
-						// If multiple Confluence IDs map to the same Dify ID,
-						// this will overwrite previous entries for the same Confluence ID.
-						// This assumes a Confluence ID maps to only one Dify document.
 						confluenceIDToDifyRecord[trimmedID] = record
 					}
 				}
@@ -338,12 +235,6 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DifyDocumentMet
 	return confluenceIDToDifyRecord, nil
 }
 
-// UpdateDocumentByText modifies existing document content
-// ctx: Context for request cancellation
-// datasetID: Target dataset ID
-// documentID: Document ID to update
-// req: Update request details
-// Returns update response or error
 func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config)
@@ -389,8 +280,10 @@ func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateD
 			return &response, nil
 		}
 
-		// Only retry on server errors (5xx) or rate limiting (429)
 		if resp.StatusCode < 500 && resp.StatusCode != 429 {
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.datasetID, url)
+			log.Printf("error response: %s", string(body))
 			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 
@@ -404,125 +297,163 @@ func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateD
 	return &response, nil
 }
 
-// DeleteDocument handles removing a Confluence ID association from a Dify document.
-// If the document is associated with multiple Confluence IDs, it only updates the metadata.
-// If it's the last associated Confluence ID, it deletes the Dify document entirely.
-// documentID: The Dify document ID.
-// confluenceIDToRemove: The specific Confluence ID to disassociate.
-// Returns error if the operation fails.
+func (c *Client) GetHashByDifyIDFromRecord(documentID string) string {
+	record, exists := c.GetDocumentMetadataRecord(documentID)
+	if !exists {
+		return ""
+	}
+	return record.Xxh3
+}
+
+func (c *Client) GetDifyIDByHash(hash string) string {
+	if c.hashMapping == nil {
+		return ""
+	}
+	c.hashMutex.RLock()
+	defer c.hashMutex.RUnlock()
+	return c.hashMapping[hash]
+}
+
+func (c *Client) SetHashMapping(hash, difyID string) {
+	c.hashMutex.Lock()
+	defer c.hashMutex.Unlock()
+	if c.hashMapping == nil {
+		c.hashMapping = make(map[string]string)
+	}
+	c.hashMapping[hash] = difyID
+}
+
+func (c *Client) DeleteHashMapping(hash string) {
+	c.hashMutex.Lock()
+	defer c.hashMutex.Unlock()
+	if c.hashMapping != nil {
+		delete(c.hashMapping, hash)
+	}
+}
+
+func (c *Client) DeleteMetaMapping(documentID string) {
+	c.hashMutex.Lock()
+	defer c.hashMutex.Unlock()
+	if c.metaMapping != nil {
+		delete(c.metaMapping, documentID)
+	}
+}
+
+// DeleteDocument handles the removal of a Confluence ID association from a Dify document.
+// If the removed ID is the last one associated with the Dify document, the document itself is deleted.
+// Otherwise, the document's metadata is updated to remove the specified Confluence ID.
 func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
 	record, exists := c.GetDocumentMetadataRecord(documentID)
 	if !exists {
-		// If there's no mapping, maybe the document was already deleted or never mapped?
-		// Attempt deletion anyway, or log a warning. Let's try deleting.
-		log.Printf("Warning: No metadata record found for Dify document %s during deletion attempt for Confluence ID %s. Attempting direct deletion.", documentID, confluenceIDToRemove)
-		// Fall through to actual deletion logic below.
+		// If the record doesn't exist locally, it might still exist in Dify.
+		// Log a warning and attempt direct deletion, assuming this might be the only ID.
+		log.Printf("Warning: No local metadata record found for Dify document %s during deletion attempt for Confluence ID %s. Attempting direct deletion.", documentID, confluenceIDToRemove)
+		return c.performDeleteRequest(documentID)
 	}
 
+	// Filter out the confluenceIDToRemove
 	existingIDs := strings.Split(record.ConfluenceIDs, ",")
-	remainingIDs := []string{}
+	remainingIDs := make([]string, 0, len(existingIDs))
 	found := false
-
 	for _, id := range existingIDs {
 		trimmedID := strings.TrimSpace(id)
 		if trimmedID == confluenceIDToRemove {
-			found = true // Mark that we found the ID to remove
+			found = true
 		} else if trimmedID != "" {
-			remainingIDs = append(remainingIDs, trimmedID) // Keep other valid IDs
+			remainingIDs = append(remainingIDs, trimmedID)
 		}
 	}
 
-	// If the ID to remove wasn't even in the list, log warning and maybe still delete?
-	if !found && record.ConfluenceIDs != "" { // Check if ConfluenceIDs was actually populated
-		log.Printf("Warning: Confluence ID %s not found in metadata record for Dify document %s (%s). Proceeding with potential deletion.", confluenceIDToRemove, documentID, record.ConfluenceIDs)
-		// Decide if we should still delete. Let's assume yes for now.
+	// If the ID to remove wasn't found in the record, log a warning but proceed.
+	// It's possible the local cache is stale. The update/delete operation will handle it.
+	if !found {
+		log.Printf("Warning: Confluence ID %s not found in local metadata record for Dify document %s (%s). Proceeding with operation.", confluenceIDToRemove, documentID, record.ConfluenceIDs)
 	}
 
-	// If there are other IDs remaining after removal
+	// Decide whether to update metadata or delete the document
 	if len(remainingIDs) > 0 {
-		log.Printf("Dify document %s has other associated Confluence IDs. Updating metadata instead of deleting.", documentID)
-		newIDsStr := strings.Join(remainingIDs, ",")
+		// Update metadata if other IDs remain
+		log.Printf("Dify document %s has other associated Confluence IDs (%s). Updating metadata.", documentID, strings.Join(remainingIDs, ","))
+		return c.updateDocumentConfluenceIDs(documentID, record, remainingIDs)
+	} else {
+		// Delete the document if this was the last ID
+		log.Printf("Confluence ID %s is the last known association for Dify document %s. Proceeding with deletion.", confluenceIDToRemove, documentID)
+		return c.performDeleteRequest(documentID)
+	}
+}
 
-		// Update the record in the client's internal map first
-		updatedRecord := record // Make a copy to modify
-		updatedRecord.ConfluenceIDs = newIDsStr
-		c.SetDocumentMetadataRecord(documentID, updatedRecord) // Update internal map
+// updateDocumentConfluenceIDs updates the 'id' metadata field for a Dify document.
+func (c *Client) updateDocumentConfluenceIDs(documentID string, originalRecord DocumentMetadataRecord, remainingIDs []string) error {
+	newIDsStr := strings.Join(remainingIDs, ",")
 
-		// Prepare metadata update request for Dify API
-		metaIDFieldID := c.GetMetaID("id") // Get the Dify Field ID for the 'id' metadata
-		if metaIDFieldID == "" {
-			// This should not happen if InitMetadata ran correctly
-			return fmt.Errorf("critical error: metadata field 'id' not found in client config for dataset %s", c.datasetID)
-		}
+	metaIDFieldID := c.GetMetaID("id")
+	if metaIDFieldID == "" {
+		// This is critical, as we cannot update the IDs without the field ID.
+		return fmt.Errorf("critical error: metadata field 'id' not found in client config for dataset %s. Cannot update document %s", c.datasetID, documentID)
+	}
 
-		// Prepare the list of metadata fields to update, mirroring updateDocumentMetadata logic
-		metadataToUpdate := []DocumentMetadata{}
+	// Prepare the metadata update request specifically for the 'id' field
+	metadataToUpdate := []DocumentMetadata{
+		{ID: metaIDFieldID, Name: "id", Value: newIDsStr},
+	}
 
-		// Helper function to add metadata if valid
-		addMeta := func(fieldName, value string) {
-			fieldID := c.GetMetaID(fieldName)
-			if fieldID != "" && value != "" {
-				metadataToUpdate = append(metadataToUpdate, DocumentMetadata{ID: fieldID, Name: fieldName, Value: value})
-			} else if fieldID == "" {
-				// Log if a field from the record exists but isn't configured in Dify meta
-				// This helps diagnose potential configuration mismatches.
-				// Only log if the value is not empty, otherwise it's just an unused field.
-				if value != "" {
-					log.Printf("Warning: Metadata field '%s' has value in record but is not configured in Dify meta for dataset %s. Skipping update for this field.", fieldName, c.datasetID)
+	// Add other metadata fields if they exist in the original record and are configured
+	addMeta := func(fieldName, value string) {
+		fieldID := c.GetMetaID(fieldName)
+		if fieldID != "" && value != "" {
+			// Check if the field is already in the list to avoid duplicates (though 'id' is the primary focus)
+			alreadyExists := false
+			for _, meta := range metadataToUpdate {
+				if meta.Name == fieldName {
+					alreadyExists = true
+					break
 				}
 			}
+			if !alreadyExists {
+				metadataToUpdate = append(metadataToUpdate, DocumentMetadata{ID: fieldID, Name: fieldName, Value: value})
+			}
+		} else if fieldID == "" && value != "" {
+			log.Printf("Warning: Metadata field '%s' has value in record but is not configured in Dify meta for dataset %s. Skipping update for this field.", fieldName, c.datasetID)
 		}
-
-		// Add 'id' field (always attempt if configured)
-		if metaIDFieldID != "" {
-			metadataToUpdate = append(metadataToUpdate, DocumentMetadata{ID: metaIDFieldID, Name: "id", Value: newIDsStr})
-		} else {
-			// This case is handled by the error check above, but included for completeness
-			log.Printf("Critical Error: Metadata field 'id' not configured. Cannot update remaining IDs.")
-			// The error is already returned above.
-		}
-
-		// Add other fields based on the existing record
-		addMeta("url", record.URL)
-		addMeta("source_type", "confluence") // Always try to set source_type if configured
-		addMeta("type", record.Type)
-		addMeta("space_key", record.SpaceKey)
-		addMeta("title", record.Title)
-		addMeta("when", record.When)
-		addMeta("download", record.Download)
-
-		// Only proceed if there's actually metadata to update (at least 'id' should be there if configured)
-		if len(metadataToUpdate) == 0 {
-			log.Printf("Warning: No configured metadata fields to update for Dify document %s after removing Confluence ID %s. This might indicate a configuration issue.", documentID, confluenceIDToRemove)
-			// Decide if this is an error or just a warning. Let's treat as warning for now.
-			// We still updated the internal map, so return nil.
-			return nil
-		}
-
-		updateReq := UpdateDocumentMetadataRequest{
-			OperationData: []DocumentOperation{
-				{
-					DocumentID:   documentID,
-					MetadataList: metadataToUpdate, // Use the constructed list
-				},
-			},
-		}
-
-		// Call the existing UpdateDocumentMetadata function
-		err := c.UpdateDocumentMetadata(updateReq)
-		if err != nil {
-			log.Printf("Failed to update metadata for Dify document %s after removing Confluence ID %s: %v", documentID, confluenceIDToRemove, err)
-			// Rollback internal map? Or just return error? Let's return error.
-			// Rollback the change in the internal map
-			c.SetDocumentMetadataRecord(documentID, record) // Restore original record
-			return fmt.Errorf("failed to update metadata for document %s: %w", documentID, err)
-		}
-		return nil // Metadata updated, no deletion needed
 	}
 
-	// --- If no IDs remain, proceed with actual deletion ---
-	log.Printf("Confluence ID %s is the last association for Dify document %s. Proceeding with deletion.", confluenceIDToRemove, documentID)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // Increased timeout slightly
+	// Include other relevant metadata fields from the original record
+	addMeta("url", originalRecord.URL)
+	addMeta("source_type", "confluence") // Assuming it's always confluence here
+	addMeta("type", originalRecord.Type)
+	addMeta("space_key", originalRecord.SpaceKey)
+	addMeta("title", originalRecord.Title)
+	addMeta("when", originalRecord.When)
+	addMeta("xxh3", originalRecord.Xxh3)
+
+	updateReq := UpdateDocumentMetadataRequest{
+		OperationData: []DocumentOperation{
+			{
+				DocumentID:   documentID,
+				MetadataList: metadataToUpdate,
+			},
+		},
+	}
+
+	// Perform the update API call
+	err := c.updateDocumentMetadataByRequest(updateReq)
+	if err != nil {
+		log.Printf("Failed to update metadata for Dify document %s after removing Confluence ID: %v", documentID, err)
+		// No need to restore the local record here, as the API call failed. The local state remains unchanged until success.
+		return fmt.Errorf("failed to update metadata for document %s: %w", documentID, err)
+	}
+
+	// Update local cache only on successful API call
+	updatedRecord := originalRecord
+	updatedRecord.ConfluenceIDs = newIDsStr
+	c.SetDocumentMetadataRecord(documentID, updatedRecord)
+
+	return nil
+}
+
+// performDeleteRequest sends the actual DELETE request to the Dify API.
+func (c *Client) performDeleteRequest(documentID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	url := fmt.Sprintf("%s/datasets/%s/documents/%s", c.baseURL, c.datasetID, documentID)
@@ -539,16 +470,33 @@ func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent { // Allow 204 No Content as success
-		// Attempt to read the error body
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		bodyString := string(bodyBytes)
-		log.Printf("Document deletion failed. Status: %d, Body: %s", resp.StatusCode, bodyString)
-		return fmt.Errorf("unexpected status code %d during deletion of %s. Body: %s", resp.StatusCode, documentID, bodyString)
+	// Check for successful status codes (200 OK or 204 No Content)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Document deletion failed for %s. Status: %d, datasetID: %s, url: %s", documentID, resp.StatusCode, c.datasetID, url)
+		log.Printf("error response: %s", string(body))
+		// Handle 404 Not Found specifically - maybe the document was already deleted
+		if resp.StatusCode == http.StatusNotFound {
+			log.Printf("Document %s not found in Dify. It might have been deleted already.", documentID)
+			// Clean up local cache even if deletion failed because it wasn't found
+			c.cleanupLocalCache(documentID)
+			return nil // Treat as success if not found
+		}
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	// Successfully deleted, remove from internal map
-	delete(c.metaMapping, documentID)
+	// Clean up local cache on successful deletion
+	c.cleanupLocalCache(documentID)
 	log.Printf("Successfully deleted Dify document %s.", documentID)
 	return nil
+}
+
+// cleanupLocalCache removes the document's entries from internal mappings.
+func (c *Client) cleanupLocalCache(documentID string) {
+	// Get hash before deleting meta mapping
+	hash := c.GetHashByDifyIDFromRecord(documentID)
+	c.DeleteMetaMapping(documentID)
+	if hash != "" {
+		c.DeleteHashMapping(hash)
+	}
 }

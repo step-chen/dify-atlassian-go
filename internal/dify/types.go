@@ -1,6 +1,10 @@
 package dify
 
-import "github.com/step-chen/dify-atlassian-go/internal/config"
+import (
+	"time"
+
+	"github.com/step-chen/dify-atlassian-go/internal/config"
+)
 
 // Indexing status constants
 const (
@@ -18,14 +22,12 @@ const (
 // DocLanguage: Document language code
 // ProcessRule: Document processing rules
 type CreateDocumentRequest struct {
-	Name              string                 `json:"name"`               // Document name
-	Text              string                 `json:"text"`               // Document content
-	DocType           string                 `json:"doc_type"`           // Document type (e.g., "book", "web_page", "paper", "social_media_post", "wikipedia_entry", "personal_document", "business_document", "im_chat_log", "synced_from_notion", "synced_from_github", "others")
-	DocMetadata       map[string]interface{} `json:"doc_metadata"`       // Document metadata
-	IndexingTechnique string                 `json:"indexing_technique"` // Indexing technique (e.g. "high_quality", "economy")
-	DocForm           string                 `json:"doc_form,omitempty"` // Document format (e.g. "text_model", "hierarchical_model", "qa_model")
-	DocLanguage       string                 `json:"doc_language"`       // Document language (e.g. "English", "Chinese")
-	ProcessRule       config.ProcessRule     `json:"process_rule"`       // Document processing rules
+	Name              string             `json:"name"`               // Document name
+	Text              string             `json:"text"`               // Document content
+	IndexingTechnique string             `json:"indexing_technique"` // Indexing technique (e.g. "high_quality", "economy")
+	DocForm           string             `json:"doc_form,omitempty"` // Document format (e.g. "text_model", "hierarchical_model", "qa_model")
+	DocLanguage       string             `json:"doc_language"`       // Document language (e.g. "English", "Chinese")
+	ProcessRule       config.ProcessRule `json:"process_rule"`       // Document processing rules
 }
 
 // CreateDocumentByFileRequest contains parameters for file-based document creation
@@ -124,6 +126,36 @@ type IndexingStatusResponse struct {
 	} `json:"data"`
 }
 
+func (i *IndexingStatusResponse) LastStepAt() time.Time {
+	if len(i.Data) == 0 {
+		return time.Time{}
+	}
+
+	// Get the first record
+	record := i.Data[0]
+
+	// Convert all timestamps to time.Time
+	timestamps := []time.Time{
+		time.Unix(int64(record.ProcessingStartedAt), 0),
+		time.Unix(int64(record.ParsingCompletedAt), 0),
+		time.Unix(int64(record.CleaningCompletedAt), 0),
+		time.Unix(int64(record.SplittingCompletedAt), 0),
+		time.Unix(int64(record.CompletedAt), 0),
+		time.Unix(int64(record.PausedAt), 0),
+		time.Unix(int64(record.StoppedAt), 0),
+	}
+
+	// Find the latest timestamp
+	latest := time.Time{}
+	for _, t := range timestamps {
+		if t.After(latest) {
+			latest = t
+		}
+	}
+
+	return latest
+}
+
 // UpdateDocumentRequest contains parameters for document updates
 // Name: New document title (optional)
 // Text: Updated document content (optional)
@@ -154,16 +186,34 @@ type DocumentListResponse struct {
 	Page    int  `json:"page"`
 }
 
-// DifyDocumentMetadataRecord holds the metadata associated with a Dify document,
+// DocumentMetadataRecord holds the metadata associated with a Dify document,
 // primarily linking it back to its Confluence source(s).
-type DifyDocumentMetadataRecord struct {
-	URL           string // Confluence URL (page or attachment download link)
-	SourceType    string // Always "confluence" for this application
-	Type          string // "page" or "attachment"
-	SpaceKey      string // Confluence space key
-	Title         string // Confluence page or attachment title
-	ConfluenceIDs string // Comma-separated list of associated Confluence content IDs
-	When          string // Last modified timestamp (RFC3339 format) from Confluence
-	Download      string // Specific download link for attachments
-	DifyID        string // The corresponding Dify document ID (redundant with map key, but useful)
+// It is used both for storing the metadata state and as parameters for updates.
+type DocumentMetadataRecord struct {
+	URL               string // Confluence URL (page or attachment download link)
+	SourceType        string // Always "confluence" for this application
+	Type              string // "page" or "attachment"
+	SpaceKey          string // Confluence space key
+	Title             string // Confluence page or attachment title
+	ConfluenceIDs     string // Comma-separated list of associated Confluence content IDs (stored state)
+	ConfluenceIDToAdd string `json:"-"` // Transient field: Confluence ID to add during an update operation. Ignored by JSON marshalling.
+	When              string // Last modified timestamp (RFC3339 format) from Confluence
+	DifyID            string // The corresponding Dify document ID
+	Xxh3              string // XXH3 hash of the content
+}
+
+// DocumentMetadata represents a single key-value pair for Dify's metadata API.
+type DocumentMetadata struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
+	Name  string `json:"name"`
+}
+
+type DocumentOperation struct {
+	DocumentID   string             `json:"document_id"`
+	MetadataList []DocumentMetadata `json:"metadata_list"`
+}
+
+type UpdateDocumentMetadataRequest struct {
+	OperationData []DocumentOperation `json:"operation_data"`
 }

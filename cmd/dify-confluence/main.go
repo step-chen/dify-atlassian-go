@@ -143,6 +143,8 @@ func statusChecker(ctx context.Context, spaceKey, confluenceID, title, batch str
 		if status.Data[0].IndexingStatus == "completed" {
 			return "completed", nil
 		}
+		op.StartAt = status.LastStepAt()
+
 		// Check if ProcessingStartedAt is more than 2 minutes ago
 		if time.Since(op.StartAt) > time.Duration(cfg.Concurrency.IndexingTimeout)*time.Minute {
 			fmt.Println("timeout:", op.StartAt, time.Since(op.StartAt), time.Now())

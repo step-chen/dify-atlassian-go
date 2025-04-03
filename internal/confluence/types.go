@@ -5,34 +5,29 @@ import (
 	"time"
 )
 
-// Client represents a Confluence v1 API client
+type ContentType int
+
+const (
+	ContentTypePage ContentType = iota
+	ContentTypeAttachment
+)
+
 type Client struct {
-	baseURL          string          // Base URL of the Confluence instance
-	apiKey           string          // API key for authentication
-	client           *http.Client    // HTTP client for making requests
-	allowedTypes     map[string]bool // Allowed media types for attachments
-	unsupportedTypes map[string]bool // Unsupported media types to skip
+	baseURL          string
+	apiKey           string
+	client           *http.Client
+	allowedTypes     map[string]bool
+	unsupportedTypes map[string]bool
 }
 
-// Attachment represents an attachment
 type AttachmentBasicInfo struct {
 	LastModifiedDate string
 	MediaType        string
 }
 
-// Attachment represents an attachment
-type Attachment struct {
-	ID               string `json:"id"`
-	Title            string `json:"title"`
-	Author           string `json:"author"`
-	LastModifiedDate string `json:"last_modified_date"`
-	MediaType        string `json:"mediaType"`
-	Download         string `json:"download"`
-}
-
 type ContentOperation struct {
-	Action           int8 // 0: create, 1: update, 2: delete, 3: no action
-	Type             int8 // 0: page, 1: attachment
+	Action           int8        // 0: create, 1: update, 2: delete, -1: no action
+	Type             ContentType // 0: page, 1: attachment
 	LastModifiedDate string
 	MediaType        string // Mime type
 	DifyID           string
@@ -41,17 +36,17 @@ type ContentOperation struct {
 }
 
 type Content struct {
-	ID          string       `json:"-"`
-	Title       string       `json:"title"`
-	URL         string       `json:"url"`
-	Language    string       `json:"language"`
-	PublishDate string       `json:"publish_date"`
-	Author      string       `json:"author/publisher"`
-	Keywords    string       `json:"topic/keywords"`
-	Description string       `json:"description"`
-	Content     string       `json:"-"`
-	Attachment  []Attachment `json:"-"`
-	DifyID      string       `json:"-"`
+	ID          string `json:"-"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	Language    string `json:"language"`
+	PublishDate string `json:"publish_date"`
+	Author      string `json:"author/publisher"`
+	Keywords    string `json:"topic/keywords"`
+	Content     string `json:"-"`
+	MediaType   string `json:"mediaType"`
+	Xxh3        string `json:"xxh3"`
 }
 
 type Links struct {

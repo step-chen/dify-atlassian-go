@@ -3,6 +3,7 @@ module github.com/step-chen/dify-atlassian-go
 go 1.24.1
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	gopkg.in/yaml.v2 v2.4.0
 )
