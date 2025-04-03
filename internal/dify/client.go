@@ -373,11 +373,9 @@ func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
 	// Decide whether to update metadata or delete the document
 	if len(remainingIDs) > 0 {
 		// Update metadata if other IDs remain
-		log.Printf("Dify document %s has other associated Confluence IDs (%s). Updating metadata.", documentID, strings.Join(remainingIDs, ","))
 		return c.updateDocumentConfluenceIDs(documentID, record, remainingIDs)
 	} else {
 		// Delete the document if this was the last ID
-		log.Printf("Confluence ID %s is the last known association for Dify document %s. Proceeding with deletion.", confluenceIDToRemove, documentID)
 		return c.performDeleteRequest(documentID)
 	}
 }
@@ -487,7 +485,7 @@ func (c *Client) performDeleteRequest(documentID string) error {
 
 	// Clean up local cache on successful deletion
 	c.cleanupLocalCache(documentID)
-	log.Printf("Successfully deleted Dify document %s.", documentID)
+
 	return nil
 }
 
