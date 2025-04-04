@@ -83,7 +83,7 @@ func convert2MarkdownByPandoc(inputFilePath string) (string, error) {
 		return "", fmt.Errorf("pandoc execution failed: %w\nstderr: %s", err, stderr.String())
 	}
 
-	return stdout.String(), nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func convert2MarkdownByMarkitdown(inputPath string) (string, error) {
@@ -109,7 +109,7 @@ func convert2MarkdownByMarkitdown(inputPath string) (string, error) {
 		return "", fmt.Errorf("markitdown docker conversion failed: %w, stderr: %s", err, stderr.String())
 	}
 
-	return stdout.String(), nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func ConvertWithPandoc(inputPath string) (string, error) {
@@ -178,7 +178,7 @@ func ConvertHTMLToMarkdown(htmlContent string) (string, error) {
 	// Assuming MarkitdownImage is defined elsewhere, e.g., as a constant or global variable like "kohirens/markitdown"
 	// If MarkitdownImage is not defined, this will cause a compile error.
 	// Replace "MarkitdownImage" with the actual image name if it's different or pass it as config.
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", MarkitdownImage) // Example image name
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", MarkitdownImage, "-m", "text/html") // Example image name
 
 	// Set stdin to the HTML content string
 	cmd.Stdin = strings.NewReader(htmlContent)
@@ -203,7 +203,7 @@ func ConvertHTMLToMarkdown(htmlContent string) (string, error) {
 	}
 
 	// Return the converted markdown content
-	return stdout.String(), nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // PrepareAttachmentFile downloads a file from the given URL and saves it to a temporary file

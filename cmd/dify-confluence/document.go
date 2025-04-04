@@ -93,16 +93,40 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 		Op:               operation,
 	}
 
+	var content *confluence.Content
+	var err error
+
 	switch operation.Type {
 	case 0: // page
-		content, err := confluenceClient.GetContent(contentID)
+		content, err = confluenceClient.GetContent(contentID)
 		if err != nil {
 			return fmt.Errorf("failed to get content %s: %w", contentID, err)
 		}
-		j.Content = content
-		docID := client.GetDifyIDByHash(j.Content.Xxh3)
-		if docID != "" {
-			j.DocumentID = docID
+	case 1: // attachment
+		content, err = confluenceClient.GetAttachment(contentID)
+		if err != nil {
+			return fmt.Errorf("failed to get attachment %s: %w", contentID, err)
+		}
+	default:
+		// Handle unsupported content types
+		return fmt.Errorf("unsupported content type %d for content ID %s", operation.Type, contentID)
+	}
+
+	if content.Content == "" {
+		if operation.DifyID != "" {
+			// Attempt to delete the document if it exists
+			if err := client.DeleteDocument(operation.DifyID, contentID); err != nil {
+				log.Printf("failed to delete empty attachment %s: %v", contentID, err)
+			}
+		}
+		batchPool.MarkTaskComplete(spaceKey)
+		return nil
+	}
+
+	j.Content = content
+	docID := client.GetDifyIDByHash(j.Content.Xxh3)
+	if docID != "" {
+		if !j.Client.IsExistsForDifyID(docID, j.Content.ID) {
 			// Update metadata using the new struct
 			params := dify.DocumentMetadataRecord{
 				URL:               j.Content.URL,
@@ -117,43 +141,15 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 			if err := j.Client.UpdateDocumentMetadata(docID, params); err != nil {
 				log.Printf("failed to update document metadata for %s: %v", docID, err)
 			}
-			batchPool.MarkTaskComplete(spaceKey)
-			return nil
 		}
 
-	case 1: // attachment
-		attachment, err := confluenceClient.GetAttachment(contentID)
-		if err != nil {
-			return fmt.Errorf("failed to get attachment %s: %w", contentID, err)
+		if j.DocumentID != docID && j.DocumentID != "" {
+			j.Client.DeleteDocument(j.DocumentID, j.Content.ID)
 		}
-		j.Content = attachment
-		docID := client.GetDifyIDByHash(j.Content.Xxh3)
-		if docID != "" {
-			if !j.Client.IsExistsForDifyID(docID, j.Content.ID) {
-				// Update metadata using the new struct
-				params := dify.DocumentMetadataRecord{
-					URL:               j.Content.URL,
-					SourceType:        "confluence", // Added SourceType
-					Type:              j.Content.Type,
-					SpaceKey:          j.SpaceKey,
-					Title:             j.Content.Title,
-					ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
-					When:              j.Content.PublishDate, // Renamed from Timestamp
-					Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
-				}
-				if err := j.Client.UpdateDocumentMetadata(docID, params); err != nil {
-					log.Printf("failed to update document metadata for %s: %v", docID, err)
-				}
-			}
-
-			if j.DocumentID != docID && j.DocumentID != "" {
-				j.Client.DeleteDocument(j.DocumentID, j.Content.ID)
-			}
-			batchPool.MarkTaskComplete(j.SpaceKey)
-			return nil
-		} else {
-			j.Op.Action = 0
-		}
+		batchPool.MarkTaskComplete(j.SpaceKey)
+		return nil
+	} else {
+		j.Op.Action = 0
 	}
 
 	jobChan.Jobs <- j

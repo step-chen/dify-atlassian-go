@@ -160,13 +160,17 @@ func (c *Client) GetContent(contentID string) (*Content, error) {
 		Keywords:    strings.Join(contentKeywords, ","),
 		MediaType:   "text/html",
 	}
-	if md, err := utils.ConvertHTMLToMarkdown(rawContent.Body.View.Value); err != nil {
-		content.Content = utils.EnsureTitleInContent(utils.SanitizeHTML(rawContent.Body.View.Value), content.Title)
-	} else {
-		content.Content = utils.EnsureTitleInContent(md, "# "+content.Title)
-	}
 
-	content.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(content.Content))
+	md := ""
+	if md, err = utils.ConvertHTMLToMarkdown(rawContent.Body.View.Value); err != nil {
+		md = utils.SanitizeHTML(rawContent.Body.View.Value)
+	}
+	if md != "" {
+		content.Content = utils.EnsureTitleInContent(md, "# "+content.Title)
+		content.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(content.Content))
+	} else {
+		content.Content = ""
+	}
 
 	return content, nil
 }
@@ -206,10 +210,12 @@ func (c *Client) GetAttachment(attachmentID string) (*Content, error) {
 		URL:         c.baseURL + rawAttachment.Links.Download,
 	}
 
-	if md, err := utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType); err != nil {
-
-	} else {
-		a.Content = md
+	md := ""
+	if md, err = utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType); err != nil {
+		return nil, fmt.Errorf("failed to convert %s, %s with response: %v", a.Title, a.MediaType, err)
+	}
+	if md != "" {
+		a.Content = utils.EnsureTitleInContent(md, "# "+a.Title)
 		a.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(a.Content))
 	}
 
