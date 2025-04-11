@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/step-chen/dify-atlassian-go/internal/concurrency"
-	"github.com/step-chen/dify-atlassian-go/internal/config"
+	confluence_cfg "github.com/step-chen/dify-atlassian-go/internal/config/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
@@ -19,14 +19,14 @@ var (
 	batchPool       *concurrency.BatchPool
 	timeoutContents map[string]map[string]confluence.ContentOperation // Stores map[spaceKey]map[contentID]confluence.ContentOperation
 	timeoutMutex    sync.Mutex                                        // Mutex for protecting timeoutContents
-	cfg             *config.Config                                    // Global configuration
+	cfg             *confluence_cfg.Config                            // Use the specific Confluence config type
 )
 
 // Application entry point, handles initialization and task processing
 func main() {
-	// Load config file
+	// Load config file using the confluence config loader
 	var err error
-	cfg, err = config.LoadConfig("config.yaml")
+	cfg, err = confluence_cfg.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -39,18 +39,18 @@ func main() {
 
 	// Init batch pool
 	// Use BatchPoolSize for max workers, QueueSize for the internal task queue
-	// Pass the loaded config (cfg) to the constructor
-	batchPool = concurrency.NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, cfg)
+	// Pass the Concurrency part of the loaded config to the constructor
+	batchPool = concurrency.NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, cfg.Concurrency)
 
 	// Init Dify clients per space
 	difyClients = make(map[string]*dify.Client)
-	for _, spaceKey := range cfg.Confluence.SpaceKeys {
-		datasetID, exists := cfg.Dify.Datasets[spaceKey]
+	for _, spaceKey := range cfg.ConfluenceSettings.SpaceKeys { // Use ConfluenceSettings
+		dataset, exists := cfg.Dify.Datasets[spaceKey]
 		if !exists {
 			log.Fatalf("no dataset_id configured for space key: %s", spaceKey)
 		}
 
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, dataset, cfg)
 		if err != nil {
 			log.Fatalf("failed to create Dify client for space %s: %v", spaceKey, err)
 		}
@@ -61,7 +61,7 @@ func main() {
 	}
 
 	// Init Confluence client
-	confluenceClient, err := confluence.NewClient(cfg.Confluence.BaseURL, cfg.Confluence.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes)
+	confluenceClient, err := confluence.NewClient(cfg.ConfluenceSettings.BaseURL, cfg.ConfluenceSettings.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes) // Use ConfluenceSettings
 	if err != nil {
 		log.Fatalf("failed to create Confluence client: %v", err)
 	}
@@ -81,7 +81,7 @@ func main() {
 	for i := 0; i < cfg.Concurrency.MaxRetries+1; i++ {
 		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
 		// Process all spaces
-		for _, spaceKey := range cfg.Confluence.SpaceKeys {
+		for _, spaceKey := range cfg.ConfluenceSettings.SpaceKeys { // Use ConfluenceSettings
 			c := difyClients[spaceKey]
 			if err := processSpace(spaceKey, c, confluenceClient, &jobChannels); err != nil {
 				log.Printf("error processing space %s: %v", spaceKey, err)

@@ -38,10 +38,10 @@ type BatchPool struct {
 	progress      sync.Map // Stores map[string]*SpaceProgress for per-space tracking
 	mu            sync.Mutex
 	totalLen      int            // Max length of total count string across all spaces for formatting
-	cfg           *config.Config // Add config field
+	cfg           config.ConcCfg // Store only the concurrency config
 }
 
-func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error), cfg *config.Config) *BatchPool { // Add cfg parameter
+func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error), concurrencyCfg config.ConcCfg) *BatchPool { // Accept ConcCfg directly
 	if maxWorkers <= 0 {
 		maxWorkers = 1
 	}
@@ -54,7 +54,7 @@ func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.
 		statusChecker: statusChecker,
 		taskQueue:     make(chan Task, queueSize),
 		shutdown:      make(chan struct{}),
-		cfg:           cfg, // Store config
+		cfg:           concurrencyCfg, // Store concurrency config
 		// progress is initialized implicitly by sync.Map
 	}
 
@@ -112,7 +112,7 @@ func (bp *BatchPool) Add(ctx context.Context, spaceKey, confluenceID, title, bat
 }
 
 func (bp *BatchPool) monitorBatch(task Task) {
-	taskTimeout := time.Duration(bp.cfg.Concurrency.IndexingTimeout) * time.Minute
+	taskTimeout := time.Duration(bp.cfg.IndexingTimeout) * time.Minute // Access IndexingTimeout directly
 	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout)
 	defer cancel()
 

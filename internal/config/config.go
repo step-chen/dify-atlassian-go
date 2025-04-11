@@ -20,11 +20,27 @@ import (
 // AllowedTypes: Map of supported media types
 // UnsupportedTypes: Map of unsupported media types
 type Config struct {
-	Confluence       ConfluenceConfig  `yaml:"confluence"`        // Confluence API configuration
-	Concurrency      ConcurrencyConfig `yaml:"concurrency"`       // Concurrency settings
-	Dify             DifyConfig        `yaml:"dify"`              // Dify API configuration
-	AllowedTypes     map[string]bool   `yaml:"allowed_types"`     // Allowed media types for attachments
-	UnsupportedTypes map[string]bool   `yaml:"unsupported_types"` // Unsupported media types
+	// Confluence field removed - handled by specific command configs now
+	Concurrency      ConcCfg         `yaml:"concurrency"`       // Concurrency settings
+	Dify             DifyCfg         `yaml:"dify"`              // Dify API configuration
+	AllowedTypes     map[string]bool `yaml:"allowed_types"`     // Allowed media types for attachments
+	UnsupportedTypes map[string]bool `yaml:"unsupported_types"` // Unsupported media types
+}
+
+// GetDifyConfig returns the Dify configuration part.
+func (c *Config) GetDifyConfig() DifyCfg {
+	return c.Dify
+}
+
+// GetConcurrencyConfig returns the Concurrency configuration part.
+func (c *Config) GetConcurrencyConfig() ConcCfg {
+	return c.Concurrency
+}
+
+// DifyClientConfigProvider defines an interface for providing necessary config to the Dify client.
+type DifyCfgProvider interface {
+	GetDifyConfig() DifyCfg
+	GetConcurrencyConfig() ConcCfg
 }
 
 // ProcessRule configures document processing behavior
@@ -73,14 +89,14 @@ type SubchunkSegmentationRule struct {
 	ChunkOverlap int    `yaml:"chunk_overlap" json:"chunk_overlap"` // Overlap between adjacent chunks
 }
 
-// ConcurrencyConfig manages parallel processing settings
+// ConcCfg manages parallel processing settings
 // Enabled: Whether concurrency is active
 // Workers: Number of concurrent workers
 // QueueSize: Size of processing queue
 // BatchPoolSize: Maximum concurrent batches
 // IndexingTimeout: Document indexing timeout (minutes)
 // MaxRetries: Maximum retry attempts for failed documents
-type ConcurrencyConfig struct {
+type ConcCfg struct {
 	Enabled              bool `yaml:"enabled"`                // Whether concurrency is enabled
 	Workers              int  `yaml:"workers"`                // Number of concurrent workers
 	QueueSize            int  `yaml:"queue_size"`             // Size of the processing queue
@@ -90,16 +106,22 @@ type ConcurrencyConfig struct {
 	DeleteTimeoutContent bool `yaml:"delete_timeout_content"` // Whether to delete timeout content
 }
 
-// DifyConfig contains Dify API integration settings
+// DatasetConfig contains configuration for a dataset
+type DatasetConfig struct {
+	Content string `yaml:"content"` // Dataset content ID
+	Title   string `yaml:"title"`   // Dataset title ID
+}
+
+// DifyCfg contains Dify API integration settings
 // BaseURL: Dify API endpoint
 // APIKey: Authentication key
 // Datasets: Space to dataset mappings
 // RagSetting: Retrieval-Augmented Generation configuration
-type DifyConfig struct {
-	BaseURL    string            `yaml:"base_url"`    // Base URL for Dify API
-	APIKey     string            `yaml:"api_key"`     // API key for authentication
-	Datasets   map[string]string `yaml:"datasets"`    // Mapping of space keys to dataset IDs
-	RagSetting RagSetting        `yaml:"rag_setting"` // RAG settings
+type DifyCfg struct {
+	BaseURL    string                   `yaml:"base_url"`    // Base URL for Dify API
+	APIKey     string                   `yaml:"api_key"`     // API key for authentication
+	Datasets   map[string]DatasetConfig `yaml:"datasets"`    // Mapping of space keys to dataset configs
+	RagSetting RagSetting               `yaml:"rag_setting"` // RAG settings
 }
 
 // RagSetting configures Retrieval-Augmented Generation
@@ -110,16 +132,6 @@ type RagSetting struct {
 	IndexingTechnique string       `yaml:"indexing_technique"` // Document indexing technique
 	DocForm           string       `yaml:"doc_form"`           // Document form
 	ProcessRule       *ProcessRule `yaml:"process_rule"`       // Document processing rules
-}
-
-// ConfluenceConfig contains Confluence API integration settings
-// BaseURL: Confluence API endpoint
-// APIKey: Authentication key
-// SpaceKeys: List of spaces to process
-type ConfluenceConfig struct {
-	BaseURL   string   `yaml:"base_url"`   // Base URL for Confluence API
-	APIKey    string   `yaml:"api_key"`    // API key for authentication
-	SpaceKeys []string `yaml:"space_keys"` // List of space keys to process
 }
 
 // WARNING: This encryption key should be securely stored and rotated periodically
@@ -148,12 +160,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %v", err)
 	}
 
-	// Decrypt API Key
-	decryptedKey, err := Decrypt(cfg.Confluence.APIKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt API key: %v", err)
-	}
-	cfg.Confluence.APIKey = decryptedKey
+	// Decryption logic for Confluence API key removed - handled in confluence.LoadConfig now
 
 	// If concurrency is not enabled, set single-thread mode
 	if !cfg.Concurrency.Enabled {

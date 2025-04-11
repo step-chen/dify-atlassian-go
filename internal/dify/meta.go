@@ -12,7 +12,11 @@ import (
 )
 
 // Supported field types for metadata
-var metaFields = []string{"url", "source_type", "type", "space_key", "title", "download", "id", "when", "xxh3"}
+// Added fields for local folder sync: doc_id, original_path, last_modified, content_hash
+var metaFields = []string{
+	"url", "source_type", "type", "space_key", "title", "download", "id", "when", "xxh3", // Confluence fields
+	"doc_id", "original_path", "last_modified", "content_hash", // Local folder fields
+}
 
 type MetaField struct {
 	ID   string `json:"id"`
@@ -87,7 +91,7 @@ func (c *Client) EnableBuiltInMetadata(ctx context.Context, enable bool) error {
 	if !enable {
 		action = "disable"
 	}
-	url := fmt.Sprintf("%s/datasets/%s/metadata/built-in/%s", c.baseURL, c.datasetID, action)
+	url := fmt.Sprintf("%s/datasets/%s/metadata/built-in/%s", c.baseURL, c.DatasetID(), action)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
 	if err != nil {
@@ -121,7 +125,7 @@ type CreateMetadataResponse struct {
 }
 
 func (c *Client) CreateMetadata(ctx context.Context, metadata CreateMetadataRequest) (*CreateMetadataResponse, error) {
-	url := fmt.Sprintf("%s/datasets/%s/metadata", c.baseURL, c.datasetID)
+	url := fmt.Sprintf("%s/datasets/%s/metadata", c.baseURL, c.DatasetID())
 
 	jsonData, err := json.Marshal(metadata)
 	if err != nil {
@@ -156,7 +160,7 @@ func (c *Client) CreateMetadata(ctx context.Context, metadata CreateMetadataRequ
 }
 
 func (c *Client) GetDatasetMetadata(ctx context.Context) (*MetadataResponse, error) {
-	url := fmt.Sprintf("%s/datasets/%s/metadata", c.baseURL, c.datasetID)
+	url := fmt.Sprintf("%s/datasets/%s/metadata", c.baseURL, c.DatasetID())
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -185,7 +189,7 @@ func (c *Client) GetDatasetMetadata(ctx context.Context) (*MetadataResponse, err
 
 // UpdateDocumentMetadataByFields updates document metadata using field names and values
 func (c *Client) updateDocumentMetadataByRequest(request UpdateDocumentMetadataRequest) error {
-	url := fmt.Sprintf("%s/datasets/%s/documents/metadata", c.baseURL, c.datasetID)
+	url := fmt.Sprintf("%s/datasets/%s/documents/metadata", c.baseURL, c.DatasetID())
 	jsonData, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)

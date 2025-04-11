@@ -49,13 +49,16 @@ type CreateDocumentByFileRequest struct {
 }
 
 // DefaultProcessRule provides default document processing rules
-// cfg: Optional configuration to override defaults
+// cfgProvider: Configuration provider to override defaults
 // Returns configured ProcessRule with fallback values
-func DefaultProcessRule(cfg *config.Config) config.ProcessRule {
+func DefaultProcessRule(cfgProvider config.DifyCfgProvider) config.ProcessRule {
 	// Use config values if available, otherwise fall back to defaults
 	var processRule config.ProcessRule
-	if cfg != nil && cfg.Dify.RagSetting.ProcessRule != nil {
-		processRule = *cfg.Dify.RagSetting.ProcessRule
+	if cfgProvider != nil {
+		difyCfg := cfgProvider.GetDifyConfig() // Get Dify config via interface
+		if difyCfg.RagSetting.ProcessRule != nil {
+			processRule = *difyCfg.RagSetting.ProcessRule
+		}
 	}
 	if processRule.Mode == "" {
 		processRule.Mode = "custom"
@@ -216,4 +219,13 @@ type DocumentOperation struct {
 
 type UpdateDocumentMetadataRequest struct {
 	OperationData []DocumentOperation `json:"operation_data"`
+}
+
+// LocalFileMetadata holds processed metadata relevant for local file synchronization.
+type LocalFileMetadata struct {
+	DifyDocumentID string    // Dify's internal document ID
+	DocID          string    // Our internal identifier (e.g., hash of relative path)
+	OriginalPath   string    // The original absolute path of the file when indexed
+	LastModified   time.Time // Last modification time stored in Dify metadata
+	ContentHash    string    // XXH3 hash of the content stored in Dify metadata
 }
