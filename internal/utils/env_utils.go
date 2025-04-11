@@ -10,6 +10,7 @@ import (
 const (
 	MarkitdownRepo    = ".markitdown"                                 // Local directory for markitdown repository
 	MarkitdownRepoURL = "https://github.com/microsoft/markitdown.git" // Markitdown repository URL
+	MarkitdownImage   = "markitdown:latest"
 )
 
 type DockerUtils struct {
