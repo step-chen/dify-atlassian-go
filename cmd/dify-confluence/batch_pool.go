@@ -1,4 +1,4 @@
-package concurrency
+package main
 
 import (
 	"context"
@@ -28,17 +28,19 @@ type SpaceProgress struct {
 }
 
 type BatchPool struct {
-	maxWorkers    int
-	statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
-	taskQueue     chan Task
-	workersWg     sync.WaitGroup // Waits for worker goroutines to finish on Close
-	overallWg     sync.WaitGroup // Waits for all submitted tasks to complete processing
-	stopOnce      sync.Once
-	shutdown      chan struct{}
-	progress      sync.Map // Stores map[string]*SpaceProgress for per-space tracking
-	mu            sync.Mutex
-	totalLen      int            // Max length of total count string across all spaces for formatting
-	cfg           config.ConcCfg // Store only the concurrency config
+	maxWorkers       int
+	statusChecker    func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
+	taskQueue        chan Task
+	workersWg        sync.WaitGroup // Waits for worker goroutines to finish on Close
+	overallWg        sync.WaitGroup // Waits for all submitted tasks to complete processing
+	stopOnce         sync.Once
+	shutdown         chan struct{}
+	progress         sync.Map // Stores map[string]*SpaceProgress for per-space tracking
+	mu               sync.Mutex
+	totalLen         int            // Max length of total count string across all spaces for formatting
+	cfg              config.ConcCfg // Store only the concurrency config
+	remainChunksTask map[string]Task
+	chunksWg         sync.WaitGroup // Waits for remain chunks task processing to finish
 }
 
 func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error), concurrencyCfg config.ConcCfg) *BatchPool { // Accept ConcCfg directly
@@ -50,11 +52,12 @@ func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.
 	}
 
 	bp := &BatchPool{
-		maxWorkers:    maxWorkers,
-		statusChecker: statusChecker,
-		taskQueue:     make(chan Task, queueSize),
-		shutdown:      make(chan struct{}),
-		cfg:           concurrencyCfg, // Store concurrency config
+		maxWorkers:       maxWorkers,
+		statusChecker:    statusChecker,
+		taskQueue:        make(chan Task, queueSize),
+		shutdown:         make(chan struct{}),
+		cfg:              concurrencyCfg,        // Store concurrency config
+		remainChunksTask: make(map[string]Task), // Initialize the map
 		// progress is initialized implicitly by sync.Map
 	}
 
@@ -62,6 +65,8 @@ func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.
 	for i := 0; i < maxWorkers; i++ {
 		go bp.worker()
 	}
+
+	go bp.RunRemainChunksTask()
 
 	return bp
 }
@@ -111,12 +116,23 @@ func (bp *BatchPool) Add(ctx context.Context, spaceKey, confluenceID, title, bat
 	}
 }
 
+func (bp *BatchPool) addChunks(task Task) error {
+	if c, ok := difyClients[task.SpaceKey]; ok {
+		if err := c.AddChunks(task.Op.DifyID, task.Title); err != nil {
+			return fmt.Errorf("failed to add chunks for DifyID %s: %w", task.Op.DifyID, err)
+		}
+	} else {
+		return fmt.Errorf("no Dify client for space %s", task.SpaceKey)
+	}
+	return nil
+}
+
 func (bp *BatchPool) monitorBatch(task Task) {
 	taskTimeout := time.Duration(bp.cfg.IndexingTimeout) * time.Minute // Access IndexingTimeout directly
 	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout)
 	defer cancel()
 
-	ticker := time.NewTicker(5 * time.Second) // Keep polling interval
+	ticker := time.NewTicker(20 * time.Second) // Keep polling interval
 	defer ticker.Stop()
 
 	logPrefix := fmt.Sprintf("Space: %s, DifyID: %s, Title: %s, Batch: %s",
@@ -135,7 +151,6 @@ func (bp *BatchPool) monitorBatch(task Task) {
 		select {
 		case <-ticker.C:
 			status, err := bp.statusChecker(ctx, task.SpaceKey, task.ConfluenceID, task.Title, task.Batch, task.Op)
-
 			progressStr := bp.ProgressString(task.SpaceKey) // Get current progress string
 
 			if err != nil {
@@ -149,6 +164,11 @@ func (bp *BatchPool) monitorBatch(task Task) {
 			} else {
 				if status == "completed" {
 					bp.MarkTaskComplete(task.SpaceKey) // Mark first
+					// Add chunks using the document name as content after successful creation
+					if err = bp.addChunks(task); err != nil {
+						bp.addChunksTask(task) // Add to remainChunksTask for retry
+						log.Printf("failed to add title chunk for document %s: %s", task.Title, err.Error())
+					}
 					taskCompleted = true
 					// Read updated progress for logging
 					log.Printf("[SUCCESS] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
@@ -160,10 +180,25 @@ func (bp *BatchPool) monitorBatch(task Task) {
 					return
 				} else if status == "failed" { // Handle explicit failure status
 					bp.MarkTaskComplete(task.SpaceKey) // Mark first
+					bp.addChunksTask(task)             // Add to remainChunksTask for retry
 					taskCompleted = true
 					log.Printf("[FAILED] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
 					// Optionally record this failure differently than 404
 					return
+				} else if status == "timeout" {
+					bp.MarkTaskComplete(task.SpaceKey) // Mark first
+
+					if err = bp.addChunks(task); err != nil {
+						bp.addChunksTask(task) // Add to remainChunksTask for retry
+						log.Printf("failed to add title chunk for document %s: %s", task.Title, err.Error())
+					}
+					taskCompleted = true
+					log.Printf("[TIMEOUT] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
+					// Optionally record this timeout differently than 404
+					return
+				} else {
+					// Handle other statuses as needed
+					continue
 				}
 				// Else: status is "pending" or similar, continue loop
 				//log.Printf("%s - %s Status: %s, continuing check.", progressStr, logPrefix, status)
@@ -172,6 +207,7 @@ func (bp *BatchPool) monitorBatch(task Task) {
 		case <-ctx.Done():
 			if !taskCompleted { // Check if not already completed by status check
 				bp.MarkTaskComplete(task.SpaceKey)
+				bp.addChunksTask(task) // Add to remainChunksTask for retry
 				taskCompleted = true
 				log.Printf("[TIMEOUT] %s - %s Monitoring timed out.", bp.ProgressString(task.SpaceKey), logPrefix)
 			}
@@ -185,6 +221,8 @@ func (bp *BatchPool) monitorBatch(task Task) {
 				log.Printf("[ABORTED] %s - %s Pool shutting down.", bp.ProgressString(task.SpaceKey), logPrefix)
 			}
 			return
+		default:
+			// No-op: Just keep waiting for the next tick or context cancellation
 		}
 	}
 }
@@ -252,5 +290,106 @@ func (bp *BatchPool) Close() {
 	// Wait for worker goroutines to finish processing any remaining tasks in the queue
 	// and then exit their loops.
 	bp.workersWg.Wait()
+
+	// Wait for remain chunks task processing to finish
+	bp.chunksWg.Wait()
 	log.Println("Batch pool shut down complete.")
+}
+
+// AddChunksTask adds a task to remainChunksTask map
+func (bp *BatchPool) addChunksTask(task Task) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	bp.remainChunksTask[task.Op.DifyID] = task
+}
+
+// DelChunksTask removes a task from remainChunksTask map
+func (bp *BatchPool) delChunksTask(difyID string) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+	delete(bp.remainChunksTask, difyID)
+}
+
+func (bp *BatchPool) RunRemainChunksTask() {
+	bp.chunksWg.Add(1)       // Correctly increments the WaitGroup for this goroutine
+	defer bp.chunksWg.Done() // Ensures WaitGroup is decremented on exit
+
+	ticker := time.NewTicker(time.Minute) // Retries every minute
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C: // Periodic retry trigger
+			bp.mu.Lock() // Lock to safely access remainChunksTask
+			// Create a copy of tasks to process outside the lock
+			tasks := make([]Task, 0, len(bp.remainChunksTask))
+			for _, task := range bp.remainChunksTask {
+				tasks = append(tasks, task)
+			}
+			bp.mu.Unlock() // Unlock quickly
+
+			processedCount := 0   // Track successful retries in this tick
+			failedCount := 0      // Track failed retries in this tick
+			currentRemaining := 0 // Track remaining after this tick's processing attempt
+
+			for _, task := range tasks {
+				// Attempt to add chunks again
+				if err := bp.addChunks(task); err == nil {
+					// Success: Remove from the map
+					// Double-check if it still exists before deleting,
+					// although unlikely to be removed elsewhere concurrently.
+					if _, exists := bp.remainChunksTask[task.Op.DifyID]; exists {
+						bp.delChunksTask(task.Op.DifyID) // Remove from the map
+						processedCount++
+					}
+				} else {
+					// Failure: Log the error and keep it for the next retry
+					log.Printf("Retry AddChunks failed for DifyID %s (Title: %s): %v", task.Op.DifyID, task.Title, err)
+					failedCount++
+				}
+			}
+
+			// Get the count remaining *after* processing this batch
+			bp.mu.Lock()
+			currentRemaining = len(bp.remainChunksTask)
+			bp.mu.Unlock()
+
+			// Log summary only if there were tasks to process
+			if len(tasks) > 0 {
+				log.Printf("Processed remaining chunks tasks: %d successful, %d failed, %d remaining.", processedCount, failedCount, currentRemaining)
+			}
+
+		case <-bp.shutdown: // Shutdown signal received
+			log.Println("RunRemainChunksTask: Shutdown signal received. Processing final remaining tasks...")
+			// Process all remaining tasks one last time before shutting down.
+			// Lock for the entire final processing duration to prevent race conditions
+			// where a task might be added by monitorBatch after the initial read
+			// but before this goroutine exits.
+			bp.mu.Lock() // Lock before reading and processing
+			tasks := make([]Task, 0, len(bp.remainChunksTask))
+			for _, task := range bp.remainChunksTask {
+				tasks = append(tasks, task)
+			}
+			initialCount := len(tasks)
+			processedCount := 0
+			failedCount := 0
+
+			for _, task := range tasks {
+				if err := bp.addChunks(task); err == nil {
+					// Still need to delete from the map even during shutdown processing
+					delete(bp.remainChunksTask, task.Op.DifyID)
+					processedCount++
+				} else {
+					// Log final failures
+					log.Printf("Final AddChunks attempt failed during shutdown for DifyID %s (Title: %s): %v", task.Op.DifyID, task.Title, err)
+					failedCount++
+				}
+			}
+			finalRemaining := len(bp.remainChunksTask) // Get final count under lock
+			bp.mu.Unlock()                             // Unlock after final processing
+
+			log.Printf("Processed final %d remaining chunks tasks before shutdown: %d successful, %d failed, %d still remaining.", initialCount, processedCount, failedCount, finalRemaining)
+			return // Exit the goroutine
+		}
+	}
 }

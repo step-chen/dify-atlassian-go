@@ -197,7 +197,6 @@ type DocumentMetadataRecord struct {
 	SourceType        string // Always "confluence" for this application
 	Type              string // "page" or "attachment"
 	SpaceKey          string // Confluence space key
-	Title             string // Confluence page or attachment title
 	ConfluenceIDs     string // Comma-separated list of associated Confluence content IDs (stored state)
 	ConfluenceIDToAdd string `json:"-"` // Transient field: Confluence ID to add during an update operation. Ignored by JSON marshalling.
 	When              string // Last modified timestamp (RFC3339 format) from Confluence
@@ -228,4 +227,14 @@ type LocalFileMetadata struct {
 	OriginalPath   string    // The original absolute path of the file when indexed
 	LastModified   time.Time // Last modification time stored in Dify metadata
 	ContentHash    string    // XXH3 hash of the content stored in Dify metadata
+}
+
+// Segment represents a single chunk to be added.
+type Segment struct {
+	Content string `json:"content"`
+}
+
+// AddChunksRequest is the request body for adding segments/chunks to a document.
+type AddChunksRequest struct {
+	Segments []Segment `json:"segments"`
 }

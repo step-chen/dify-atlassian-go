@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/step-chen/dify-atlassian-go/internal/concurrency"
 	confluence_cfg "github.com/step-chen/dify-atlassian-go/internal/config/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
@@ -16,7 +15,7 @@ import (
 
 var (
 	difyClients     map[string]*dify.Client
-	batchPool       *concurrency.BatchPool
+	batchPool       *BatchPool
 	timeoutContents map[string]map[string]confluence.ContentOperation // Stores map[spaceKey]map[contentID]confluence.ContentOperation
 	timeoutMutex    sync.Mutex                                        // Mutex for protecting timeoutContents
 	cfg             *confluence_cfg.Config                            // Use the specific Confluence config type
@@ -40,7 +39,7 @@ func main() {
 	// Init batch pool
 	// Use BatchPoolSize for max workers, QueueSize for the internal task queue
 	// Pass the Concurrency part of the loaded config to the constructor
-	batchPool = concurrency.NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, cfg.Concurrency)
+	batchPool = NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, cfg.Concurrency)
 
 	// Init Dify clients per space
 	difyClients = make(map[string]*dify.Client)
@@ -176,7 +175,7 @@ func statusChecker(ctx context.Context, spaceKey, confluenceID, title, batch str
 			} else {
 				// If not configured to delete, simply mark as completed and don't retry
 				log.Printf("Indexing timed out for %s (%s), but configured not to delete. Marking as completed.", title, confluenceID)
-				return "completed", nil
+				return "timeout", nil
 			}
 		}
 		return status.Data[0].IndexingStatus, nil

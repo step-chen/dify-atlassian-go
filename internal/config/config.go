@@ -106,22 +106,16 @@ type ConcCfg struct {
 	DeleteTimeoutContent bool `yaml:"delete_timeout_content"` // Whether to delete timeout content
 }
 
-// DatasetConfig contains configuration for a dataset
-type DatasetConfig struct {
-	Content string `yaml:"content"` // Dataset content ID
-	Title   string `yaml:"title"`   // Dataset title ID
-}
-
 // DifyCfg contains Dify API integration settings
 // BaseURL: Dify API endpoint
 // APIKey: Authentication key
 // Datasets: Space to dataset mappings
 // RagSetting: Retrieval-Augmented Generation configuration
 type DifyCfg struct {
-	BaseURL    string                   `yaml:"base_url"`    // Base URL for Dify API
-	APIKey     string                   `yaml:"api_key"`     // API key for authentication
-	Datasets   map[string]DatasetConfig `yaml:"datasets"`    // Mapping of space keys to dataset configs
-	RagSetting RagSetting               `yaml:"rag_setting"` // RAG settings
+	BaseURL    string            `yaml:"base_url"`    // Base URL for Dify API
+	APIKey     string            `yaml:"api_key"`     // API key for authentication
+	Datasets   map[string]string `yaml:"datasets"`    // Mapping of space keys to dataset IDs
+	RagSetting RagSetting        `yaml:"rag_setting"` // RAG settings
 }
 
 // RagSetting configures Retrieval-Augmented Generation

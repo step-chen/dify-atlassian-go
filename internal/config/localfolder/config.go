@@ -2,6 +2,7 @@ package localfolder_cfg
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/step-chen/dify-atlassian-go/internal/config" // Import the parent config package
@@ -12,7 +13,7 @@ import (
 type Config struct {
 	BaseConfig  `yaml:",inline"`    // Embed common settings
 	LocalFolder LocalFolderSettings `yaml:"local_folder"` // Local folder specific settings
-	Folders     []FolderMapping     `yaml:"folders"`      // List of folders to process
+	Datasets    map[string]string   `yaml:"datasets"`     // List of folders to process
 }
 
 // BaseConfig holds common configuration sections used by different commands
@@ -26,12 +27,6 @@ type BaseConfig struct {
 type LocalFolderSettings struct {
 	SupportedExtensions []string `yaml:"supported_extensions"` // List of file extensions to process (e.g., [".md", ".txt"])
 	MaxFileSizeMB       int64    `yaml:"max_file_size_mb"`     // Maximum file size in megabytes
-}
-
-// FolderMapping maps a local folder path to Dify dataset IDs
-type FolderMapping struct {
-	Path    string               `yaml:"path"`    // Path to the local folder
-	Dataset config.DatasetConfig `yaml:"dataset"` // Corresponding Dify dataset IDs
 }
 
 // GetDifyConfig returns the Dify configuration part, satisfying the DifyClientConfigProvider interface.
@@ -93,27 +88,19 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.LocalFolder.MaxFileSizeMB = 10 // Default to 10MB
 	}
 
-	// Validate folder paths and dataset IDs
-	if len(cfg.Folders) == 0 {
-		return nil, fmt.Errorf("no folders configured for processing in '%s'", path)
-	}
-	for i, folder := range cfg.Folders {
-		if folder.Path == "" {
-			return nil, fmt.Errorf("folder path is missing for folder entry %d in '%s'", i, path)
-		}
-		if folder.Dataset.Content == "" {
-			return nil, fmt.Errorf("dataset Content ID is missing for folder path '%s' in '%s'", folder.Path, path)
-		}
-		if folder.Dataset.Title == "" {
-			// Optional? Depending on requirements. Let's make it required for now.
-			return nil, fmt.Errorf("dataset Title ID is missing for folder path '%s' in '%s'", folder.Path, path)
-		}
+	for folderPath, _ := range cfg.Dify.Datasets {
 		// Basic check if path exists - more robust checks might be needed
-		if _, err := os.Stat(folder.Path); os.IsNotExist(err) {
+		if _, err := os.Stat(folderPath); os.IsNotExist(err) {
 			// Log warning instead of failing? Depends on desired behavior.
 			// For now, let's return an error.
-			return nil, fmt.Errorf("configured folder path does not exist: '%s'", folder.Path)
+			log.Printf("configured folder path does not exist: '%s'", folderPath)
+			delete(cfg.Dify.Datasets, folderPath) // Remove invalid paths
 		}
+	}
+
+	// Validate folder paths and dataset IDs
+	if len(cfg.Dify.Datasets) == 0 {
+		return nil, fmt.Errorf("no folders configured for processing in '%s'", path)
 	}
 
 	return &cfg, nil

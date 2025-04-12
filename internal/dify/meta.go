@@ -14,7 +14,7 @@ import (
 // Supported field types for metadata
 // Added fields for local folder sync: doc_id, original_path, last_modified, content_hash
 var metaFields = []string{
-	"url", "source_type", "type", "space_key", "title", "download", "id", "when", "xxh3", // Confluence fields
+	"url", "source_type", "type", "space_key", "download", "id", "when", "xxh3", // Confluence fields
 	"doc_id", "original_path", "last_modified", "content_hash", // Local folder fields
 }
 
@@ -266,9 +266,6 @@ func (c *Client) UpdateDocumentMetadata(documentID string, params DocumentMetada
 	if params.SpaceKey != "" {
 		recordToStore.SpaceKey = params.SpaceKey
 	}
-	if params.Title != "" {
-		recordToStore.Title = params.Title
-	}
 	// Use the calculated final value for ConfluenceIDs in internal storage
 	recordToStore.ConfluenceIDs = finalConfluenceIDsValue
 	if params.When != "" { // Use params.When (matches struct field name)
@@ -309,7 +306,6 @@ func (c *Client) buildApiMetadataPayload(params DocumentMetadataRecord, finalCon
 	c.addMetadataIfValid(&metadataToUpdate, "source_type", "confluence") // Always set source_type for API
 	c.addMetadataIfValid(&metadataToUpdate, "type", params.Type)
 	c.addMetadataIfValid(&metadataToUpdate, "space_key", params.SpaceKey)
-	c.addMetadataIfValid(&metadataToUpdate, "title", params.Title)
 	c.addMetadataIfValid(&metadataToUpdate, "when", params.When) // Use params.When
 	c.addMetadataIfValid(&metadataToUpdate, "xxh3", params.Xxh3) // Use params.Xxh3
 

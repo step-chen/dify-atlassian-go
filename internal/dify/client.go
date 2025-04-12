@@ -18,7 +18,7 @@ import (
 type Client struct {
 	baseURL     string
 	apiKey      string // Store the decrypted key directly
-	dataset     config.DatasetConfig
+	datasetID   string // Store the specific dataset ID string
 	httpClient  *http.Client
 	config      config.DifyCfgProvider            // Use the interface
 	meta        map[string]MetaField              // map[metaName]MetaField
@@ -28,7 +28,7 @@ type Client struct {
 }
 
 func (c *Client) DatasetID() string {
-	return c.dataset.Content
+	return c.datasetID
 }
 
 // GetConfig returns the configuration provider associated with the client.
@@ -60,10 +60,13 @@ func (c *Client) IsExistsForDifyID(difyID, confluenceID string) bool {
 	return false
 }
 
-// NewClient now accepts the DifyClientConfigProvider interface and the already decrypted API key.
-func NewClient(baseURL, decryptedAPIKey string, dataset config.DatasetConfig, cfgProvider config.DifyCfgProvider) (*Client, error) {
+// NewClient now accepts the DifyClientConfigProvider interface, the decrypted API key, and the specific dataset ID.
+func NewClient(baseURL, decryptedAPIKey string, datasetID string, cfgProvider config.DifyCfgProvider) (*Client, error) {
 	if decryptedAPIKey == "" {
 		return nil, fmt.Errorf("decrypted API key cannot be empty")
+	}
+	if datasetID == "" {
+		return nil, fmt.Errorf("dataset ID cannot be empty")
 	}
 	if cfgProvider == nil {
 		return nil, fmt.Errorf("config provider cannot be nil")
@@ -72,7 +75,7 @@ func NewClient(baseURL, decryptedAPIKey string, dataset config.DatasetConfig, cf
 	return &Client{
 		baseURL:     baseURL,
 		apiKey:      decryptedAPIKey, // Store the provided decrypted key
-		dataset:     dataset,
+		datasetID:   datasetID,       // Store the provided dataset ID
 		httpClient:  &http.Client{},
 		config:      cfgProvider,                             // Store the interface
 		metaMapping: make(map[string]DocumentMetadataRecord), // Initialize metaMapping
@@ -83,7 +86,7 @@ func (c *Client) GetIndexingStatus(spaceKey, batch string) (*IndexingStatusRespo
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("%s/datasets/%s/documents/%s/indexing-status", c.baseURL, c.dataset.Content, batch)
+	url := fmt.Sprintf("%s/datasets/%s/documents/%s/indexing-status", c.baseURL, c.datasetID, batch)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -100,7 +103,7 @@ func (c *Client) GetIndexingStatus(spaceKey, batch string) (*IndexingStatusRespo
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.dataset.Content, url)
+		log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.datasetID, url)
 		log.Printf("error response: %s", string(body))
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -127,7 +130,7 @@ func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocume
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel() // Ensure context is canceled to release resources
 
-	url := fmt.Sprintf("%s/datasets/%s/document/create-by-text", c.baseURL, c.dataset.Content)
+	url := fmt.Sprintf("%s/datasets/%s/document/create-by-text", c.baseURL, c.datasetID)
 	createDocRequest, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -144,7 +147,7 @@ func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocume
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.dataset.Content, url)
+		log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.datasetID, url)
 		log.Printf("error respone: %s", string(body))
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -171,7 +174,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 	}
 
 	for {
-		url := fmt.Sprintf("%s/datasets/%s/documents?page=%d&limit=%d", c.baseURL, c.dataset.Content, page, limit)
+		url := fmt.Sprintf("%s/datasets/%s/documents?page=%d&limit=%d", c.baseURL, c.datasetID, page, limit)
 
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
@@ -189,7 +192,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			log.Printf("unexpected status code: %d, datasetID: %s, page: %d, limit: %d, url: %s",
-				resp.StatusCode, c.dataset.Content, page, limit, url)
+				resp.StatusCode, c.datasetID, page, limit, url)
 			log.Printf("error response: %s", string(body))
 			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
@@ -244,7 +247,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 	return confluenceIDToDifyRecord, nil
 }
 
-func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
+func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
 	// Use the config provider interface to get the default process rule if needed
 	if req.ProcessRule.Mode == "" {
 		// Only set default if ProcessRule itself is provided but Mode is empty
@@ -262,7 +265,7 @@ func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateD
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("%s/datasets/%s/documents/%s/update-by-text", c.baseURL, datasetID, documentID)
+	url := fmt.Sprintf("%s/datasets/%s/documents/%s/update-by-text", c.baseURL, c.datasetID, documentID)
 
 	var response CreateDocumentResponse
 	maxRetries := 5
@@ -296,7 +299,7 @@ func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateD
 
 		if resp.StatusCode < 500 && resp.StatusCode != 429 {
 			body, _ := io.ReadAll(resp.Body)
-			log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.dataset.Content, url)
+			log.Printf("unexpected status code: %d, datasetID: %s, url: %s", resp.StatusCode, c.datasetID, url)
 			log.Printf("error response: %s", string(body))
 			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
@@ -309,6 +312,52 @@ func (c *Client) UpdateDocumentByText(datasetID, documentID string, req *UpdateD
 	}
 
 	return &response, nil
+}
+
+// AddChunks adds new segments (chunks) to an existing document in the specified dataset.
+func (c *Client) AddChunks(documentID, content string) error {
+	if documentID == "" && content == "" {
+		return fmt.Errorf("error document ID or name is empty")
+	}
+
+	req := AddChunksRequest{
+		Segments: []Segment{
+			{
+				Content: content,
+			},
+		},
+	}
+
+	requestBody, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal AddChunks request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Adjust timeout as needed
+	defer cancel()
+
+	url := fmt.Sprintf("%s/datasets/%s/documents/%s/segments", c.baseURL, c.datasetID, documentID)
+
+	addChunksReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
+	if err != nil {
+		return fmt.Errorf("failed to create AddChunks request: %w", err)
+	}
+
+	addChunksReq.Header.Set("Content-Type", "application/json")
+	addChunksReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.httpClient.Do(addChunksReq)
+	if err != nil {
+		return fmt.Errorf("failed to send AddChunks request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("add title chunks failed: unexpected status code %d; msg: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 func (c *Client) GetHashByDifyIDFromRecord(documentID string) string {
@@ -401,7 +450,7 @@ func (c *Client) updateDocumentConfluenceIDs(documentID string, originalRecord D
 	metaIDFieldID := c.GetMetaID("id")
 	if metaIDFieldID == "" {
 		// This is critical, as we cannot update the IDs without the field ID.
-		return fmt.Errorf("critical error: metadata field 'id' not found in client config for dataset %s. Cannot update document %s", c.dataset.Content, documentID)
+		return fmt.Errorf("critical error: metadata field 'id' not found in client config for dataset %s. Cannot update document %s", c.datasetID, documentID)
 	}
 
 	// Prepare the metadata update request specifically for the 'id' field
@@ -425,7 +474,7 @@ func (c *Client) updateDocumentConfluenceIDs(documentID string, originalRecord D
 				metadataToUpdate = append(metadataToUpdate, DocumentMetadata{ID: fieldID, Name: fieldName, Value: value})
 			}
 		} else if fieldID == "" && value != "" {
-			log.Printf("Warning: Metadata field '%s' has value in record but is not configured in Dify meta for dataset %s. Skipping update for this field.", fieldName, c.dataset.Content)
+			log.Printf("Warning: Metadata field '%s' has value in record but is not configured in Dify meta for dataset %s. Skipping update for this field.", fieldName, c.datasetID)
 		}
 	}
 
@@ -434,7 +483,6 @@ func (c *Client) updateDocumentConfluenceIDs(documentID string, originalRecord D
 	addMeta("source_type", "confluence") // Assuming it's always confluence here
 	addMeta("type", originalRecord.Type)
 	addMeta("space_key", originalRecord.SpaceKey)
-	addMeta("title", originalRecord.Title)
 	addMeta("when", originalRecord.When)
 	addMeta("xxh3", originalRecord.Xxh3)
 
@@ -468,7 +516,7 @@ func (c *Client) performDeleteRequest(documentID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	url := fmt.Sprintf("%s/datasets/%s/documents/%s", c.baseURL, c.dataset.Content, documentID)
+	url := fmt.Sprintf("%s/datasets/%s/documents/%s", c.baseURL, c.datasetID, documentID)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create delete request for %s: %w", documentID, err)
@@ -485,7 +533,7 @@ func (c *Client) performDeleteRequest(documentID string) error {
 	// Check for successful status codes (200 OK or 204 No Content)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Document deletion failed for %s. Status: %d, datasetID: %s, url: %s", documentID, resp.StatusCode, c.dataset.Content, url)
+		log.Printf("Document deletion failed for %s. Status: %d, datasetID: %s, url: %s", documentID, resp.StatusCode, c.datasetID, url)
 		log.Printf("error response: %s", string(body))
 		// Handle 404 Not Found specifically - maybe the document was already deleted
 		if resp.StatusCode == http.StatusNotFound {
@@ -514,10 +562,10 @@ func (c *Client) GetAllDocumentsMetadata() (map[string]LocalFileMetadata, error)
 	page := 1    // Dify API pages start from 1
 	limit := 100 // Max limit
 
-	log.Printf("Fetching all document metadata for dataset %s...", c.dataset.Content)
+	log.Printf("Fetching all document metadata for dataset %s...", c.datasetID)
 
 	for {
-		url := fmt.Sprintf("%s/datasets/%s/documents?page=%d&limit=%d&metadata_only=true", c.baseURL, c.dataset.Content, page, limit) // Use metadata_only=true
+		url := fmt.Sprintf("%s/datasets/%s/documents?page=%d&limit=%d&metadata_only=true", c.baseURL, c.datasetID, page, limit) // Use metadata_only=true
 
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
@@ -536,7 +584,7 @@ func (c *Client) GetAllDocumentsMetadata() (map[string]LocalFileMetadata, error)
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			resp.Body.Close() // Close body even on error
-			log.Printf("unexpected status code %d fetching metadata page %d for dataset %s: %s", resp.StatusCode, page, c.dataset.Content, string(bodyBytes))
+			log.Printf("unexpected status code %d fetching metadata page %d for dataset %s: %s", resp.StatusCode, page, c.datasetID, string(bodyBytes))
 			return nil, fmt.Errorf("unexpected status code %d fetching metadata page %d", resp.StatusCode, page)
 		}
 
@@ -578,17 +626,17 @@ func (c *Client) GetAllDocumentsMetadata() (map[string]LocalFileMetadata, error)
 
 			// Validate required fields and parse time
 			if docIDValue == "" {
-				log.Printf("Warning: Skipping document %s in dataset %s due to missing 'doc_id' metadata.", doc.ID, c.dataset.Content)
+				log.Printf("Warning: Skipping document %s in dataset %s due to missing 'doc_id' metadata.", doc.ID, c.datasetID)
 				continue
 			}
 			if originalPathValue == "" {
-				log.Printf("Warning: Skipping document %s (doc_id: %s) in dataset %s due to missing 'original_path' metadata.", doc.ID, docIDValue, c.dataset.Content)
+				log.Printf("Warning: Skipping document %s (doc_id: %s) in dataset %s due to missing 'original_path' metadata.", doc.ID, docIDValue, c.datasetID)
 				continue
 			}
 
 			parsedTime, err := time.Parse(time.RFC3339, lastModifiedValue)
 			if err != nil {
-				log.Printf("Warning: Skipping document %s (doc_id: %s) in dataset %s due to invalid 'last_modified' format ('%s'): %v", doc.ID, docIDValue, c.dataset.Content, lastModifiedValue, err)
+				log.Printf("Warning: Skipping document %s (doc_id: %s) in dataset %s due to invalid 'last_modified' format ('%s'): %v", doc.ID, docIDValue, c.datasetID, lastModifiedValue, err)
 				continue // Skip if time cannot be parsed
 			}
 
@@ -612,7 +660,7 @@ func (c *Client) GetAllDocumentsMetadata() (map[string]LocalFileMetadata, error)
 		// time.Sleep(100 * time.Millisecond)
 	}
 
-	log.Printf("Fetched %d document metadata records for dataset %s.", len(localMetaMap), c.dataset.Content)
+	log.Printf("Fetched %d document metadata records for dataset %s.", len(localMetaMap), c.datasetID)
 	return localMetaMap, nil
 }
 
@@ -630,7 +678,7 @@ func (c *Client) BuildLocalFileMetadataPayload(docID, originalPath string, lastM
 		metaField, exists := c.meta[fieldName]
 		if !exists {
 			// Log a warning but don't fail if a field isn't configured in Dify
-			log.Printf("Warning: Metadata field '%s' not found in Dify configuration for dataset %s. Skipping.", fieldName, c.dataset.Content)
+			log.Printf("Warning: Metadata field '%s' not found in Dify configuration for dataset %s. Skipping.", fieldName, c.datasetID)
 			return nil
 			// Alternatively, return an error if these fields are critical:
 			// return fmt.Errorf("metadata field '%s' not configured in Dify for dataset %s", fieldName, c.datasetID)

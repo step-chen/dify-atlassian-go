@@ -56,15 +56,15 @@ func main() {
 
 	// Init Dify clients per configured folder/dataset
 	difyClients = make(map[string]*dify.Client)
-	for _, folderConfig := range cfg.Folders {
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, folderConfig.Dataset, cfg)
+	for folderPath, dataset := range cfg.Dify.Datasets {
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, dataset, cfg)
 		if err != nil {
-			log.Fatalf("failed to create Dify client for Content dataset %s (folder %s): %v", folderConfig.Dataset.Content, folderConfig.Path, err)
+			log.Fatalf("failed to create Dify client for Content dataset %s (folder %s): %v", dataset, folderPath, err)
 		}
 		if err = client.InitMetadata(); err != nil {
-			log.Fatalf("failed to initialize metadata for Content dataset %s (folder %s): %v", folderConfig.Dataset.Content, folderConfig.Path, err)
+			log.Fatalf("failed to initialize metadata for Content dataset %s (folder %s): %v", dataset, folderPath, err)
 		}
-		difyClients[folderConfig.Path] = client
+		difyClients[folderPath] = client
 	}
 
 	// Populate supported extensions map and max file size
@@ -95,19 +95,17 @@ func main() {
 		log.Printf("Starting processing cycle %d with timeout %v", i+1, currentTimeout)
 
 		// Process all configured folders
-		for _, folderConfig := range cfg.Folders {
+		for folderPath, dataset := range cfg.Dify.Datasets {
 			// Use the Content dataset ID when processing the folder
-			datasetID := folderConfig.Dataset.Content
-			folderPath := folderConfig.Path
-			difyClient := difyClients[datasetID] // Assumes client was stored with Content ID
+			difyClient := difyClients[folderPath] // Assumes client was stored with Content ID
 
 			if difyClient == nil {
-				log.Printf("Warning: No Dify client found for Content dataset %s (folder %s). Skipping folder.", datasetID, folderPath)
+				log.Printf("Warning: No Dify client found for Content dataset %s (folder %s). Skipping folder.", dataset, folderPath)
 				continue
 			}
 
-			if err := processFolder(folderPath, datasetID, difyClient, &jobChannels); err != nil {
-				log.Printf("error processing folder %s (dataset %s): %v", folderPath, datasetID, err)
+			if err := processFolder(folderPath, dataset, difyClient, &jobChannels); err != nil {
+				log.Printf("error processing folder %s (dataset %s): %v", folderPath, dataset, err)
 			}
 		}
 

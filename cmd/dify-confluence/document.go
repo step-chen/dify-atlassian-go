@@ -112,7 +112,7 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 		return fmt.Errorf("unsupported content type %d for content ID %s", operation.Type, contentID)
 	}
 
-	if content.Content == "" {
+	if content.Content == "" || content.Content == "{}" {
 		if operation.DifyID != "" {
 			// Attempt to delete the document if it exists
 			if err := client.DeleteDocument(operation.DifyID, contentID); err != nil {
@@ -133,7 +133,6 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 				SourceType:        "confluence", // Added SourceType
 				Type:              j.Content.Type,
 				SpaceKey:          j.SpaceKey,
-				Title:             j.Content.Title,
 				ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
 				When:              j.Content.PublishDate, // Renamed from Timestamp
 				Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
@@ -185,7 +184,6 @@ func createDocument(j *Job) error {
 		SourceType:        "confluence", // Added SourceType
 		Type:              j.Content.Type,
 		SpaceKey:          j.SpaceKey,
-		Title:             j.Content.Title,
 		ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
 		When:              j.Content.PublishDate, // Renamed from Timestamp
 		Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
@@ -219,7 +217,7 @@ func updateDocument(j *Job) error {
 		Text: j.Content.Content,
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(j.Client.DatasetID(), j.DocumentID, &updateRequest)
+	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest)
 
 	if err != nil {
 		log.Printf("failed to update Dify document for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
@@ -234,7 +232,6 @@ func updateDocument(j *Job) error {
 		SourceType:        "confluence", // Added SourceType
 		Type:              j.Content.Type,
 		SpaceKey:          j.SpaceKey,
-		Title:             j.Content.Title,
 		ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
 		When:              j.Content.PublishDate, // Renamed from Timestamp
 		Xxh3:              j.Content.Xxh3,        // Renamed from XXH3

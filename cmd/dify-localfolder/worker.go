@@ -146,7 +146,7 @@ func processCreateUpdateJob(job *Job) error {
 			// ProcessRule: dify.DefaultProcessRule(job.DifyClient.GetConfig()),
 			// METADATA IS UPDATED IN A SEPARATE CALL LATER
 		}
-		apiResp, apiErr = job.DifyClient.UpdateDocumentByText(job.DatasetID, difyDocIDToUpdate, updateReq)
+		apiResp, apiErr = job.DifyClient.UpdateDocumentByText(difyDocIDToUpdate, updateReq)
 	} else {
 		log.Printf("Calling CreateDocumentByText for %s", filePath)
 		createReq := &dify.CreateDocumentRequest{

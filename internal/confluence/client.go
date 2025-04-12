@@ -166,7 +166,7 @@ func (c *Client) GetContent(contentID string) (*Content, error) {
 		md = utils.SanitizeHTML(rawContent.Body.View.Value)
 	}
 	if md != "" {
-		content.Content = utils.EnsureTitleInContent(md, "# "+content.Title)
+		content.Content = md
 		content.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(content.Content))
 	} else {
 		content.Content = ""
