@@ -23,6 +23,7 @@ type Client struct {
 	config      config.DifyCfgProvider            // Use the interface
 	meta        map[string]MetaField              // map[metaName]MetaField
 	metaMapping map[string]DocumentMetadataRecord // Metadata map[difyID]DocumentMetadataRecord
+	metaMutex   sync.RWMutex                      // Protects metaMapping
 	hashMapping map[string]string                 // map[xxh3]difyID
 	hashMutex   sync.RWMutex                      // Protects hashMapping
 }
@@ -37,6 +38,9 @@ func (c *Client) GetConfig() config.DifyCfgProvider {
 }
 
 func (c *Client) GetDocumentMetadataRecord(difyID string) (DocumentMetadataRecord, bool) {
+	c.metaMutex.RLock()
+	defer c.metaMutex.RUnlock()
+
 	if c.metaMapping == nil {
 		c.metaMapping = make(map[string]DocumentMetadataRecord)
 	}
@@ -314,52 +318,6 @@ func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequ
 	return &response, nil
 }
 
-// AddChunks adds new segments (chunks) to an existing document in the specified dataset.
-func (c *Client) AddChunks(documentID, content string) error {
-	if documentID == "" && content == "" {
-		return fmt.Errorf("error document ID or name is empty")
-	}
-
-	req := AddChunksRequest{
-		Segments: []Segment{
-			{
-				Content: content,
-			},
-		},
-	}
-
-	requestBody, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal AddChunks request: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Adjust timeout as needed
-	defer cancel()
-
-	url := fmt.Sprintf("%s/datasets/%s/documents/%s/segments", c.baseURL, c.datasetID, documentID)
-
-	addChunksReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
-	if err != nil {
-		return fmt.Errorf("failed to create AddChunks request: %w", err)
-	}
-
-	addChunksReq.Header.Set("Content-Type", "application/json")
-	addChunksReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(addChunksReq)
-	if err != nil {
-		return fmt.Errorf("failed to send AddChunks request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("add title chunks failed: unexpected status code %d; msg: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
 func (c *Client) GetHashByDifyIDFromRecord(documentID string) string {
 	record, exists := c.GetDocumentMetadataRecord(documentID)
 	if !exists {
@@ -395,8 +353,8 @@ func (c *Client) DeleteHashMapping(hash string) {
 }
 
 func (c *Client) DeleteMetaMapping(documentID string) {
-	c.hashMutex.Lock()
-	defer c.hashMutex.Unlock()
+	c.metaMutex.Lock()
+	defer c.metaMutex.Unlock()
 	if c.metaMapping != nil {
 		delete(c.metaMapping, documentID)
 	}

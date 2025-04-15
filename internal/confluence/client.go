@@ -119,14 +119,18 @@ func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]Cont
 	return contents, nil
 }
 
-func (c *Client) GetContent(contentID string) (*Content, error) {
+func (c *Client) GetContent(contentID string, onlyTitle bool) (*Content, error) {
 	url := c.baseURL + "/rest/api/content/" + contentID
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
-	req = c.preparePageQuery(req, "", "", []string{"body.view", "version", "history", "metadata.labels"})
+	if onlyTitle {
+		req = c.preparePageQuery(req, "", "", []string{"version", "history", "metadata.labels"})
+	} else {
+		req = c.preparePageQuery(req, "", "", []string{"body.view", "version", "history", "metadata.labels"})
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -161,21 +165,30 @@ func (c *Client) GetContent(contentID string) (*Content, error) {
 		MediaType:   "text/html",
 	}
 
-	md := ""
-	if md, err = utils.ConvertHTMLToMarkdown(rawContent.Body.View.Value); err != nil {
-		md = utils.SanitizeHTML(rawContent.Body.View.Value)
-	}
-	if md != "" {
-		content.Content = md
+	if onlyTitle {
+		content.Content = utils.FormatTitle(rawContent.Title)
 		content.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(content.Content))
 	} else {
-		content.Content = ""
+		md := ""
+		if rawContent.Body.View.Value == "" {
+			content.Content = ""
+			return content, nil
+		}
+		if md, err = utils.ConvertHTMLToMarkdown(rawContent.Body.View.Value); err != nil {
+			md = utils.SanitizeHTML(rawContent.Body.View.Value)
+		}
+		if md != "" && md != "{}" {
+			content.Content = utils.EnsureTitleInContent(md, rawContent.Title, "# ", "\n\n")
+			content.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(content.Content))
+		} else {
+			content.Content = ""
+		}
 	}
 
 	return content, nil
 }
 
-func (c *Client) GetAttachment(attachmentID string) (*Content, error) {
+func (c *Client) GetAttachment(attachmentID string, onlyTitle bool) (*Content, error) {
 	url := c.baseURL + "/rest/api/content/" + attachmentID
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -210,13 +223,18 @@ func (c *Client) GetAttachment(attachmentID string) (*Content, error) {
 		URL:         c.baseURL + rawAttachment.Links.Download,
 	}
 
-	md := ""
-	if md, err = utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType); err != nil {
-		return nil, fmt.Errorf("failed to convert %s, %s with response: %v", a.Title, a.MediaType, err)
-	}
-	if md != "" {
-		a.Content = utils.EnsureTitleInContent(md, "# "+a.Title)
+	if onlyTitle {
+		a.Content = utils.FormatTitle(utils.RemoveFileExtension(a.Title))
 		a.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(a.Content))
+	} else {
+		md := ""
+		if md, err = utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType); err != nil {
+			return nil, fmt.Errorf("failed to convert %s, %s with response: %v", a.Title, a.MediaType, err)
+		}
+		if md != "" && md != "{}" {
+			a.Content = utils.EnsureTitleInContent(md, utils.RemoveFileExtension(a.Title), "# ", "\n\n")
+			a.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(a.Content))
+		}
 	}
 
 	return a, nil

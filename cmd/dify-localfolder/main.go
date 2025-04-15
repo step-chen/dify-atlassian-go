@@ -55,15 +55,20 @@ func main() {
 	batchPool = NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, &cfg.BaseConfig) // Pass pointer to BaseConfig
 
 	// Init Dify clients per configured folder/dataset
-	difyClients = make(map[string]*dify.Client)
-	for folderPath, dataset := range cfg.Dify.Datasets {
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, dataset, cfg)
+	difyClients = make(map[string]*dify.Client) // Store client mapped by folderPath for easy lookup later
+	for folderPath, datasetID := range cfg.Dify.Datasets {
+		if datasetID == "" {
+			log.Fatalf("dataset_id is missing for folder path: %s", folderPath)
+		}
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
 		if err != nil {
-			log.Fatalf("failed to create Dify client for Content dataset %s (folder %s): %v", dataset, folderPath, err)
+			log.Fatalf("failed to create Dify client for dataset %s (folder %s): %v", datasetID, folderPath, err)
 		}
 		if err = client.InitMetadata(); err != nil {
-			log.Fatalf("failed to initialize metadata for Content dataset %s (folder %s): %v", dataset, folderPath, err)
+			log.Fatalf("failed to initialize metadata for dataset %s (folder %s): %v", datasetID, folderPath, err)
 		}
+		// Store the client using the folderPath as the key, as the primary loop iterates over folders.
+		// We can retrieve the dataset IDs from the client's config if needed later.
 		difyClients[folderPath] = client
 	}
 
@@ -95,17 +100,18 @@ func main() {
 		log.Printf("Starting processing cycle %d with timeout %v", i+1, currentTimeout)
 
 		// Process all configured folders
-		for folderPath, dataset := range cfg.Dify.Datasets {
-			// Use the Content dataset ID when processing the folder
-			difyClient := difyClients[folderPath] // Assumes client was stored with Content ID
+		for folderPath, datasetID := range cfg.Dify.Datasets {
+			// Retrieve the client associated with the folder path
+			difyClient, clientExists := difyClients[folderPath]
 
-			if difyClient == nil {
-				log.Printf("Warning: No Dify client found for Content dataset %s (folder %s). Skipping folder.", dataset, folderPath)
+			if !clientExists {
+				// This case should ideally not happen if initialization succeeded, but check anyway.
+				log.Printf("Warning: No Dify client found for folder path %s. Skipping folder.", folderPath)
 				continue
 			}
-
-			if err := processFolder(folderPath, dataset, difyClient, &jobChannels); err != nil {
-				log.Printf("error processing folder %s (dataset %s): %v", folderPath, dataset, err)
+			// Pass the folder path, the dataset ID, and the client to processFolder
+			if err := processFolder(folderPath, datasetID, difyClient, &jobChannels); err != nil {
+				log.Printf("error processing folder %s (dataset %s): %v", folderPath, datasetID, err)
 			}
 		}
 

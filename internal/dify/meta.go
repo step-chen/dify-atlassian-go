@@ -361,6 +361,9 @@ func (c *Client) calculateFinalConfluenceIDs(documentID, newConfluenceID string)
 
 // SetDocumentMetadataRecord stores or updates a DocumentMetadataRecord in the client's internal cache.
 func (c *Client) SetDocumentMetadataRecord(difyID string, record DocumentMetadataRecord) {
+	c.metaMutex.Lock()
+	defer c.metaMutex.Unlock()
+
 	// The record parameter is already of the correct type DocumentMetadataRecord
 	if c.metaMapping == nil {
 		c.metaMapping = make(map[string]DocumentMetadataRecord)

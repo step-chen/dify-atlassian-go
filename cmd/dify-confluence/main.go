@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag" // Add flag package
 	"fmt"
 	"log"
 	"sync"
@@ -23,11 +24,15 @@ var (
 
 // Application entry point, handles initialization and task processing
 func main() {
+	// Define command-line flag for config file path
+	configFile := flag.String("c", "config.yaml", "Path to the configuration file")
+	flag.Parse() // Parse command-line flags
+
 	// Load config file using the confluence config loader
 	var err error
-	cfg, err = confluence_cfg.LoadConfig("config.yaml")
+	cfg, err = confluence_cfg.LoadConfig(*configFile) // Use the flag value
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatalf("Failed to load config from %s: %v", *configFile, err)
 	}
 
 	// Initialize required tools
@@ -41,17 +46,30 @@ func main() {
 	// Pass the Concurrency part of the loaded config to the constructor
 	batchPool = NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, cfg.Concurrency)
 
+	// Run the main processing loop
+	runProcessingLoop()
+
+	// Close the batch pool gracefully
+	batchPool.Close()
+
+	log.Println("Processing complete.")
+}
+
+// runProcessingLoop initializes clients, workers, and manages the space processing loop with retries.
+func runProcessingLoop() {
 	// Init Dify clients per space
 	difyClients = make(map[string]*dify.Client)
 	for _, spaceKey := range cfg.ConfluenceSettings.SpaceKeys { // Use ConfluenceSettings
-		dataset, exists := cfg.Dify.Datasets[spaceKey]
+		datasetID, exists := cfg.Dify.Datasets[spaceKey]
 		if !exists {
-			log.Fatalf("no dataset_id configured for space key: %s", spaceKey)
+			log.Fatalf("no dataset mapping configured for space key: %s", spaceKey)
 		}
-
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, dataset, cfg)
+		if datasetID == "" {
+			log.Fatalf("dataset_id is missing for space key: %s", spaceKey)
+		}
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
 		if err != nil {
-			log.Fatalf("failed to create Dify client for space %s: %v", spaceKey, err)
+			log.Fatalf("failed to create Dify client for space %s (dataset %s): %v", spaceKey, datasetID, err)
 		}
 		if err = client.InitMetadata(); err != nil {
 			log.Fatalf("failed to initialize metadata for space %s: %v", spaceKey, err)
@@ -77,22 +95,47 @@ func main() {
 		go worker(jobChannels.Jobs, &wg)
 	}
 
+	// Process spaces with retries
 	for i := 0; i < cfg.Concurrency.MaxRetries+1; i++ {
 		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
+
 		// Process all spaces
 		for _, spaceKey := range cfg.ConfluenceSettings.SpaceKeys { // Use ConfluenceSettings
-			c := difyClients[spaceKey]
+			c, exists := difyClients[spaceKey]
+			if !exists {
+				log.Printf("Warning: Dify client not found for space %s during processing run %d. Skipping.", spaceKey, i+1)
+				continue
+			}
 			if err := processSpace(spaceKey, c, confluenceClient, &jobChannels); err != nil {
-				log.Printf("error processing space %s: %v", spaceKey, err)
+				log.Printf("error processing space %s during run %d: %v", spaceKey, i+1, err)
 			}
 		}
-		// Now, wait for all submitted batch monitoring tasks from the initial run to complete
-		// The job channel will be closed later, after potential retry jobs are submitted.
-		log.Println("Waiting for initial batch monitoring tasks to complete...")
-		batchPool.Wait()
-		log.Println("Initial batch monitoring complete.")
 
-		timeoutContents = make(map[string]map[string]confluence.ContentOperation) // Clear timeout contents for next retry
+		// Wait for batch monitoring tasks from this run to complete
+		log.Printf("Waiting for batch monitoring tasks to complete for run %d...", i+1)
+		batchPool.Wait()
+		log.Printf("Batch monitoring complete for run %d.", i+1)
+
+		// Check if there are any timed-out items to retry
+		timeoutMutex.Lock()
+		itemsToRetry := len(timeoutContents) > 0
+		timeoutMutex.Unlock()
+
+		if !itemsToRetry {
+			log.Printf("No timed-out items found after run %d. Processing finished.", i+1)
+			break // Exit retry loop if no timeouts occurred
+		}
+
+		log.Printf("Found %d timed-out items after run %d. Preparing for retry.", len(timeoutContents), i+1)
+		// Reset timeoutContents for the next potential retry run (or if this was the last run)
+		// The actual retry logic happens within processSpace based on the timeoutContents populated by statusChecker
+		timeoutMutex.Lock()
+		timeoutContents = make(map[string]map[string]confluence.ContentOperation) // Clear for next retry or final state
+		timeoutMutex.Unlock()
+
+		if i == cfg.Concurrency.MaxRetries {
+			log.Printf("Max retries (%d) reached. Some items may not have been processed successfully.", cfg.Concurrency.MaxRetries)
+		}
 	}
 
 	// Close the job channel *after* submitting initial jobs AND all retry jobs
@@ -106,11 +149,6 @@ func main() {
 
 	// Log failed types (remains unchanged)
 	utils.WriteFailedTypesLog()
-
-	// Close the batch pool gracefully
-	batchPool.Close()
-
-	log.Println("Processing complete.")
 }
 
 // Check batch status using Dify client

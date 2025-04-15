@@ -98,12 +98,12 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 
 	switch operation.Type {
 	case 0: // page
-		content, err = confluenceClient.GetContent(contentID)
+		content, err = confluenceClient.GetContent(contentID, cfg.ConfluenceSettings.OnlyTitle)
 		if err != nil {
 			return fmt.Errorf("failed to get content %s: %w", contentID, err)
 		}
 	case 1: // attachment
-		content, err = confluenceClient.GetAttachment(contentID)
+		content, err = confluenceClient.GetAttachment(contentID, cfg.ConfluenceSettings.OnlyTitle)
 		if err != nil {
 			return fmt.Errorf("failed to get attachment %s: %w", contentID, err)
 		}
@@ -112,7 +112,7 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 		return fmt.Errorf("unsupported content type %d for content ID %s", operation.Type, contentID)
 	}
 
-	if content.Content == "" || content.Content == "{}" {
+	if content.Content == "" {
 		if operation.DifyID != "" {
 			// Attempt to delete the document if it exists
 			if err := client.DeleteDocument(operation.DifyID, contentID); err != nil {
@@ -198,7 +198,7 @@ func createDocument(j *Job) error {
 
 	// Add document to batch pool for indexing tracking
 	// Add context.Background() as the first argument
-	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, j.Content.Content, resp.Batch, j.Op)
 	if err != nil {
 		// Log error if adding to the pool fails (e.g., pool shutdown)
 		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
@@ -214,7 +214,7 @@ func updateDocument(j *Job) error {
 	// Update document
 	updateRequest := dify.UpdateDocumentRequest{
 		Name: j.Content.Title,
-		Text: j.Content.Content,
+		Text: j.Content.Title,
 	}
 
 	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest)
@@ -242,7 +242,7 @@ func updateDocument(j *Job) error {
 
 	// Add document to batch pool for indexing tracking
 	// Add context.Background() as the first argument
-	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, j.Content.Content, resp.Batch, j.Op)
 	if err != nil {
 		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
 	}

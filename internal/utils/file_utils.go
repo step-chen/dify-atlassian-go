@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -35,14 +36,45 @@ func WriteFailedTypesLog() {
 	}
 }
 
+func FormatContent(s string) string {
+	s = TrimString(s)
+	s = strings.TrimLeft(s, ".")
+	// Trim leading and trailing whitespace and non-printable characters
+	return TrimString(s)
+}
+
+func FormatTitle(s string) string {
+	s = TrimString(s)
+	s = strings.TrimLeft(s, ".")
+	// Replace underscores with spaces
+	s = ReplaceUnderscoresWithSpaces(s)
+	// Trim leading and trailing whitespace and non-printable characters
+	return TrimString(s)
+}
+
 // EnsureTitleInMarkdown ensures the markdown content starts with the title
 // If the content doesn't start with the title, adds it in markdown format
-func EnsureTitleInContent(content, title string) string {
-	trimmed := strings.TrimSpace(content)
-	if !strings.HasPrefix(trimmed, title) {
-		return title + "\n\n" + content
+func EnsureTitleInContent(content, title, prefix, suffix string) string {
+	s := FormatTitle(title)
+	s = prefix + s + suffix
+	if !strings.HasPrefix(content, title) {
+		return s + content
 	}
 	return content
+}
+
+// TrimString removes leading and trailing meaningless characters from the input string
+// including whitespace, control characters, and other non-printable characters
+func TrimString(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool {
+		// Remove spaces, control characters, and other non-printable characters
+		return unicode.IsSpace(r) || !unicode.IsGraphic(r)
+	})
+}
+
+// ReplaceUnderscoresWithSpaces replaces all underscores in the input string with spaces
+func ReplaceUnderscoresWithSpaces(s string) string {
+	return strings.ReplaceAll(s, "_", " ")
 }
 
 // RemoveFileExtension removes the extension from a filename if it exists.
@@ -83,7 +115,7 @@ func convert2MarkdownByPandoc(inputFilePath string) (string, error) {
 		return "", fmt.Errorf("pandoc execution failed: %w\nstderr: %s", err, stderr.String())
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	return FormatContent(stdout.String()), nil
 }
 
 func convert2MarkdownByMarkitdown(inputPath string) (string, error) {
@@ -109,7 +141,7 @@ func convert2MarkdownByMarkitdown(inputPath string) (string, error) {
 		return "", fmt.Errorf("markitdown docker conversion failed: %w, stderr: %s", err, stderr.String())
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	return FormatContent(stdout.String()), nil
 }
 
 func ConvertWithPandoc(inputPath string) (string, error) {
@@ -203,7 +235,7 @@ func ConvertHTMLToMarkdown(htmlContent string) (string, error) {
 	}
 
 	// Return the converted markdown content
-	return strings.TrimSpace(stdout.String()), nil
+	return FormatContent(stdout.String()), nil
 }
 
 // PrepareAttachmentFile downloads a file from the given URL and saves it to a temporary file
@@ -320,62 +352,6 @@ func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string) (string,
 
 	return "", fmt.Errorf("failed to convert file to Markdown: %w", conversionErr)
 }
-
-/*
-func PrepareAttachmentFile(url, apiKey, fileName string, mediaType string, allowedTypes map[string]bool) (showPath string, tmpPath string, err error) {
-	// Download file to temp location
-	tmpPath, err = DownloadFileToTemp(url, apiKey, fileName)
-	if err != nil {
-		return "", "", err
-	}
-
-	// Check if file type is allowed
-	if allowedTypes[mediaType] {
-		// Don't remove the file as it's in allowedTypes and should be preserved
-		return fileName, tmpPath, nil
-	}
-
-	showPath, err = ChangeFileExtension(fileName, ".md")
-	if err != nil {
-		return "", "", fmt.Errorf("failed to change file extension: %w", err)
-	}
-
-	// Declare variables outside if block
-	var convertedPath string
-	var markitdownErr error
-
-	// Try Markitdown first if image is available
-	if dockerUtils.markitdownImage {
-		convertedPath, markitdownErr = ConvertWithMarkitdown(tmpPath)
-		if markitdownErr == nil {
-			os.Remove(tmpPath) // Remove original file after successful conversion
-			return showPath, convertedPath, nil
-		}
-	} else {
-		markitdownErr = fmt.Errorf("markitdown docker image not available")
-	}
-
-	// Fallback to Pandoc if image is available
-	var pandocErr error
-	if dockerUtils.pandocImage {
-		convertedPath, pandocErr = ConvertWithPandoc(tmpPath)
-		if pandocErr == nil {
-			os.Remove(tmpPath) // Remove original file after successful conversion
-			return showPath, convertedPath, nil
-		}
-	} else {
-		pandocErr = fmt.Errorf("pandoc docker image not available")
-	}
-
-	// Cleanup and return error
-	os.Remove(tmpPath) // Remove file when both conversions fail
-	failedTypesMu.Lock()
-	failedTypes[mediaType] = true
-	failedTypesMu.Unlock()
-
-	return "", "", fmt.Errorf("all conversion attempts failed. Markitdown: %w, Pandoc: %w", markitdownErr, pandocErr)
-}
-*/
 
 // XXH3Hash generates XXH3 hash for the input text
 func XXH3Hash(text string) uint64 {

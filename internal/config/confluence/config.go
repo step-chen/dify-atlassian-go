@@ -31,6 +31,7 @@ type ConfluenceSettings struct {
 	BaseURL   string   `yaml:"base_url"`   // Base URL for Confluence API
 	APIKey    string   `yaml:"api_key"`    // API key for authentication (encrypted)
 	SpaceKeys []string `yaml:"space_keys"` // List of space keys to process
+	OnlyTitle bool     `yaml:"only_title"` // Whether to process only titles
 }
 
 // GetDifyConfig returns the Dify configuration part, satisfying the DifyClientConfigProvider interface.
