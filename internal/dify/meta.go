@@ -14,8 +14,8 @@ import (
 // Supported field types for metadata
 // Added fields for local folder sync: doc_id, original_path, last_modified, content_hash
 var metaFields = []string{
-	"url", "source_type", "type", "space_key", "download", "id", "when", "xxh3", // Confluence fields
-	"doc_id", "original_path", "last_modified", "content_hash", // Local folder fields
+	"url", "source_type", "type", "space_key", "download", "id", "last_modified_date", "xxh3", // Confluence fields
+	"doc_id", "original_path", // Local folder fields
 }
 
 type MetaField struct {
@@ -306,8 +306,8 @@ func (c *Client) buildApiMetadataPayload(params DocumentMetadataRecord, finalCon
 	c.addMetadataIfValid(&metadataToUpdate, "source_type", "confluence") // Always set source_type for API
 	c.addMetadataIfValid(&metadataToUpdate, "type", params.Type)
 	c.addMetadataIfValid(&metadataToUpdate, "space_key", params.SpaceKey)
-	c.addMetadataIfValid(&metadataToUpdate, "when", params.When) // Use params.When
-	c.addMetadataIfValid(&metadataToUpdate, "xxh3", params.Xxh3) // Use params.Xxh3
+	c.addMetadataIfValid(&metadataToUpdate, "last_modified_date", params.When) // Use params.When
+	c.addMetadataIfValid(&metadataToUpdate, "xxh3", params.Xxh3)               // Use params.Xxh3
 
 	// Add Confluence ID metadata ('id' field) if configured and the final value is not empty
 	metaIDFieldID := c.GetMetaID("id") // Dify's internal ID for the 'id' metadata field

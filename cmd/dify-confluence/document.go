@@ -126,17 +126,19 @@ func processContentOperation(contentID string, operation confluence.ContentOpera
 	j.Content = content
 	docID := client.GetDifyIDByHash(j.Content.Xxh3)
 	if docID != "" {
-		if !j.Client.IsExistsForDifyID(docID, j.Content.ID) {
+		params := dify.DocumentMetadataRecord{
+			URL:               j.Content.URL,
+			SourceType:        "confluence", // Added SourceType
+			Type:              j.Content.Type,
+			SpaceKey:          j.SpaceKey,
+			ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
+			When:              j.Content.PublishDate, // Renamed from Timestamp
+			Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
+			DifyID:            docID,                 // Added DifyID
+		}
+
+		if !j.Client.IsEqualDifyMeta(j.Content.ID, params) {
 			// Update metadata using the new struct
-			params := dify.DocumentMetadataRecord{
-				URL:               j.Content.URL,
-				SourceType:        "confluence", // Added SourceType
-				Type:              j.Content.Type,
-				SpaceKey:          j.SpaceKey,
-				ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
-				When:              j.Content.PublishDate, // Renamed from Timestamp
-				Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
-			}
 			if err := j.Client.UpdateDocumentMetadata(docID, params); err != nil {
 				log.Printf("failed to update document metadata for %s: %v", docID, err)
 			}

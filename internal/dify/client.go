@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/step-chen/dify-atlassian-go/internal/config"
+	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
 type Client struct {
@@ -48,9 +49,15 @@ func (c *Client) GetDocumentMetadataRecord(difyID string) (DocumentMetadataRecor
 	return record, exists
 }
 
-func (c *Client) IsExistsForDifyID(difyID, confluenceID string) bool {
-	record, exists := c.GetDocumentMetadataRecord(difyID)
+func (c *Client) IsEqualDifyMeta(confluenceID string, meta DocumentMetadataRecord) bool {
+	record, exists := c.GetDocumentMetadataRecord(meta.DifyID)
 	if !exists {
+		return false
+	}
+
+	if record.SourceType != meta.SourceType || record.SpaceKey != meta.SpaceKey ||
+		record.Type != meta.Type || record.Xxh3 != meta.Xxh3 ||
+		utils.BeforeRFC3339Times(record.When, meta.When) {
 		return false
 	}
 
@@ -211,7 +218,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 			for _, meta := range doc.DocMetadata {
 				if meta.Name == "id" {
 					confluenceIDs = meta.Value
-				} else if meta.Name == "when" {
+				} else if meta.Name == "last_modified_date" {
 					whenVal = meta.Value
 				} else if meta.Name == "xxh3" {
 					xxh3Val = meta.Value
@@ -441,7 +448,7 @@ func (c *Client) updateDocumentConfluenceIDs(documentID string, originalRecord D
 	addMeta("source_type", "confluence") // Assuming it's always confluence here
 	addMeta("type", originalRecord.Type)
 	addMeta("space_key", originalRecord.SpaceKey)
-	addMeta("when", originalRecord.When)
+	addMeta("last_modified_date", originalRecord.When)
 	addMeta("xxh3", originalRecord.Xxh3)
 
 	updateReq := UpdateDocumentMetadataRequest{
@@ -578,7 +585,7 @@ func (c *Client) GetAllDocumentsMetadata() (map[string]LocalFileMetadata, error)
 					lastModifiedValue = apiMeta.Value
 				case "content_hash": // Assuming this is the xxh3 hash
 					contentHashValue = apiMeta.Value
-					// We can ignore other fields like 'id' (confluence id), 'when', 'xxh3' if not needed for local sync logic
+					// We can ignore other fields like 'id' (confluence id), 'last_modified_date', 'xxh3' if not needed for local sync logic
 				}
 			}
 
