@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
 // Supported field types for metadata
@@ -222,6 +224,11 @@ func (c *Client) updateDocumentMetadataByRequest(request UpdateDocumentMetadataR
 
 // UpdateDocumentMetadata updates document metadata in Dify API and internal cache
 func (c *Client) UpdateDocumentMetadata(documentID string, params DocumentMetadataRecord) error {
+	if record, exists := c.GetDocumentMetadataRecord(documentID); exists {
+		if utils.BeforeRFC3339Times(params.When, record.When) {
+			params.When = record.When // Use existing value if the new one is older
+		}
+	}
 	// 1. Calculate final Confluence IDs based on params.ConfluenceIDToAdd and existing internal state
 	finalConfluenceIDsValue := c.calculateFinalConfluenceIDs(documentID, params.ConfluenceIDToAdd)
 

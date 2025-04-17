@@ -59,12 +59,7 @@ func initOperations(client *dify.Client, contents map[string]confluence.ContentO
 			op.DatasetID = client.DatasetID()
 
 			// Compare times using utility function (Confluence op vs Dify record)
-			equal, err := utils.CompareRFC3339Times(op.LastModifiedDate, record.When)
-			if err != nil {
-				fmt.Printf("failed to compare times: %s\n", err.Error())
-				equal = false
-				//return fmt.Errorf("failed to compare times: %w", err)
-			}
+			equal := !utils.BeforeRFC3339Times(record.When, op.LastModifiedDate)
 
 			// Determine action based on time comparison
 			if !equal {

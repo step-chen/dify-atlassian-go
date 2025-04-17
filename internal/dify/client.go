@@ -214,7 +214,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 		}
 
 		for _, doc := range response.Data {
-			var confluenceIDs, whenVal, xxh3Val string
+			var confluenceIDs, whenVal, xxh3Val, source_type, space_key, doc_type, url string
 			for _, meta := range doc.DocMetadata {
 				if meta.Name == "id" {
 					confluenceIDs = meta.Value
@@ -222,6 +222,14 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 					whenVal = meta.Value
 				} else if meta.Name == "xxh3" {
 					xxh3Val = meta.Value
+				} else if meta.Name == "source_type" {
+					source_type = meta.Value
+				} else if meta.Name == "space_key" {
+					space_key = meta.Value
+				} else if meta.Name == "type" {
+					doc_type = meta.Value
+				} else if meta.Name == "url" {
+					url = meta.Value
 				}
 			}
 
@@ -231,6 +239,10 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 					ConfluenceIDs: confluenceIDs,
 					When:          whenVal,
 					Xxh3:          xxh3Val,
+					SourceType:    source_type,
+					SpaceKey:      space_key,
+					Type:          doc_type,
+					URL:           url,
 				}
 				c.SetHashMapping(xxh3Val, doc.ID)
 
