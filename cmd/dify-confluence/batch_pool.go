@@ -193,10 +193,10 @@ func (bp *BatchPool) monitorBatch(task Task) {
 
 		case <-ctx.Done():
 			if !taskCompleted { // Check if not already completed by status check
-				bp.MarkTaskComplete(task.SpaceKey)
-				taskCompleted = true
-				log.Printf("[TIMEOUT] %s - %s Monitoring timed out.", bp.ProgressString(task.SpaceKey), logPrefix)
+				log.Printf("[TIMEOUT] %s - %s Monitoring timed out, continue check.", bp.ProgressString(task.SpaceKey), logPrefix)
+				continue
 			}
+			taskCompleted = true
 			return
 
 		case <-bp.shutdown:
