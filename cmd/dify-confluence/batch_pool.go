@@ -165,21 +165,26 @@ func (bp *BatchPool) monitorBatch(task Task) {
 					// Optionally record this failure differently than 404
 					return
 				} else if status == "timeout" {
-					bp.MarkTaskComplete(task.SpaceKey) // Mark first
-					taskCompleted = true
-					log.Printf("[TIMEOUT] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
-					// Optionally record this timeout differently than 404
-					return
+					if cfg.Concurrency.DeleteTimeoutContent {
+						bp.MarkTaskComplete(task.SpaceKey) // Mark first
+						taskCompleted = true
+						log.Printf("[TIMEOUT] %s - %s.", bp.ProgressString(task.SpaceKey), logPrefix)
+						return
+					} else {
+						task.Op.StartAt = time.Now() // Update start time for next check
+						log.Printf("[TIMEOUT] %s - %s, indexing timeout, continue check.", bp.ProgressString(task.SpaceKey), logPrefix)
+						continue
+					}
 				} else if status == "error" {
-					bp.MarkTaskComplete(task.SpaceKey) // Mark first
-					taskCompleted = true
-					log.Printf("[ERROR] %s - %s, indexing error, mark as complete.", bp.ProgressString(task.SpaceKey), logPrefix)
-				} else if status == "indexing" || status == "waiting" || status == "splitting" {
+					task.Op.StartAt = time.Now() // Update start time for next check
+					log.Printf("[ERROR] %s - %s, indexing error, continue check.", bp.ProgressString(task.SpaceKey), logPrefix)
+					continue
+				} else if status == "indexing" || status == "waiting" || status == "splitting" || status == "parsing" { // cleaning
 					task.Op.StartAt = time.Now() // Update start time for next check
 					continue
 				} else {
 					// Handle other statuses as needed
-					log.Printf("%s - %s Status: %s, continuing check.", progressStr, logPrefix, status)
+					// log.Printf("%s - %s Status: %s, continuing check.", progressStr, logPrefix, status)
 					continue
 				}
 				// Else: status is "pending" or similar, continue loop
