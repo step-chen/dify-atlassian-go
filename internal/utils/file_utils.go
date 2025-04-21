@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,15 @@ func WriteFailedTypesLog() {
 func FormatContent(s string) string {
 	s = TrimString(s)
 	s = strings.TrimLeft(s, ".")
+
+	if strings.HasSuffix(s, "{}") {
+		s = s[:len(s)-2]
+	}
+	re := regexp.MustCompile(`(?m)^(##)\s+`)
+	s = re.ReplaceAllString(s, "***###***\n## ")
+	re = regexp.MustCompile(`(?m)^(#)\s+`)
+	s = re.ReplaceAllString(s, "***###***\n# ")
+
 	// Trim leading and trailing whitespace and non-printable characters
 	return TrimString(s)
 }
@@ -98,11 +108,11 @@ func generateTempFileName(fileName string) string {
 // convertToMarkdown calls pandoc to convert the specified file to Markdown text
 // inputFilePath: path to the file to be converted
 // Returns the converted Markdown string and a potential error
-func convert2MarkdownByPandoc(inputFilePath string) (string, error) {
+func convert2MarkdownByPandoc(inputFilePath *string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "pandoc", inputFilePath, "-t", "markdown")
+	cmd := exec.CommandContext(ctx, "pandoc", *inputFilePath, "-t", "markdown")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -118,17 +128,48 @@ func convert2MarkdownByPandoc(inputFilePath string) (string, error) {
 	return FormatContent(stdout.String()), nil
 }
 
-func convert2MarkdownByMarkitdown(inputPath string) (string, error) {
+func convert2DocxByPandoc(inputFilePath *string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	inputFile, err := os.Open(inputPath)
+	outputFilePath, err := ChangeFileExtension(*inputFilePath, ".docx")
+
+	cmd := exec.CommandContext(ctx, "pandoc", *inputFilePath, "-o", outputFilePath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("pandoc conversion failed: %v\nCommand output:\n%s", err, string(output))
+	}
+
+	if _, err := os.Stat(outputFilePath); os.IsNotExist(err) {
+		return "", fmt.Errorf("generated docx file not found at: %s", outputFilePath)
+	}
+
+	if err := os.Remove(*inputFilePath); err != nil {
+		log.Printf("warning: failed to remove temp file %s: %v", *inputFilePath, err)
+	}
+
+	*inputFilePath = outputFilePath
+
+	return outputFilePath, nil
+}
+
+func convert2MarkdownByMarkitdown(inputPath *string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	inputFile, err := os.Open(*inputPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open input file: %w", err)
 	}
 	defer inputFile.Close()
 
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", MarkitdownImage)
+	cmd.Env = append(os.Environ(),
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+		"PYTHONIOENCODING=utf-8",
+	)
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdin = inputFile
 	cmd.Stdout = &stdout
@@ -138,7 +179,13 @@ func convert2MarkdownByMarkitdown(inputPath string) (string, error) {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("markitdown conversion timed out")
 		}
-		return "", fmt.Errorf("markitdown docker conversion failed: %w, stderr: %s", err, stderr.String())
+
+		fp, err := convert2DocxByPandoc(inputPath)
+		if err != nil {
+			return "", fmt.Errorf("%s", stderr.String())
+		} else {
+			return convert2MarkdownByMarkitdown(&fp)
+		}
 	}
 
 	return FormatContent(stdout.String()), nil
@@ -329,16 +376,16 @@ func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string) (string,
 
 	// Try Markitdown first if image is available
 	if dockerUtils.markitdownImage {
-		markdown, conversionErr = convert2MarkdownByMarkitdown(tmpPath)
+		markdown, conversionErr = convert2MarkdownByMarkitdown(&tmpPath)
 		if conversionErr == nil {
 			return markdown, nil
 		}
-		log.Printf("markitdown conversion failed: %v", conversionErr)
+		log.Printf("markitdown conversion %s, %s, %s failed: %v", url, fileName, mediaType, conversionErr)
 	}
 
 	// Fallback to Pandoc if image is available
 	if dockerUtils.pandocImage {
-		markdown, conversionErr = convert2MarkdownByPandoc(tmpPath)
+		markdown, conversionErr = convert2MarkdownByPandoc(&tmpPath)
 		if conversionErr == nil {
 			return markdown, nil
 		}
