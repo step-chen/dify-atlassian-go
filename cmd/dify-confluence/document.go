@@ -29,7 +29,7 @@ func processSpace(spaceKey string, client *dify.Client, confluenceClient *conflu
 	// Process each content operation
 	for contentID, operation := range contents {
 		if err := processContentOperation(contentID, operation, spaceKey, client, confluenceClient, jobChan); err != nil {
-			return err
+			log.Printf("error processing space %s title %s media type %s: %v", spaceKey, contentID, operation.MediaType, err)
 		}
 	}
 
