@@ -180,11 +180,13 @@ func convert2MarkdownByMarkitdown(inputPath *string) (string, error) {
 			return "", fmt.Errorf("markitdown conversion timed out")
 		}
 
-		fp, err := convert2DocxByPandoc(inputPath)
-		if err != nil {
-			return "", fmt.Errorf("%s", stderr.String())
-		} else {
-			return convert2MarkdownByMarkitdown(&fp)
+		if dockerUtils.pandocImage {
+			fp, err := convert2DocxByPandoc(inputPath)
+			if err != nil {
+				return "", fmt.Errorf("%s", stderr.String())
+			} else {
+				return convert2MarkdownByMarkitdown(&fp)
+			}
 		}
 	}
 
@@ -381,15 +383,6 @@ func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string) (string,
 			return markdown, nil
 		}
 		log.Printf("markitdown conversion %s, %s, %s failed: %v", url, fileName, mediaType, conversionErr)
-	}
-
-	// Fallback to Pandoc if image is available
-	if dockerUtils.pandocImage {
-		markdown, conversionErr = convert2MarkdownByPandoc(&tmpPath)
-		if conversionErr == nil {
-			return markdown, nil
-		}
-		log.Printf("pandoc conversion failed: %v", conversionErr)
 	}
 
 	// If all conversions failed, track the media type and return error
