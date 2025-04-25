@@ -16,7 +16,7 @@ import (
 // Supported field types for metadata
 // Added fields for local folder sync: doc_id, original_path, last_modified, content_hash
 var metaFields = []string{
-	"url", "source_type", "type", "space_key", "download", "id", "last_modified_date", "xxh3", // Confluence fields
+	"url", "source_type", "type", "space_key", "download", "id", "last_modified", "last_modified_date", "xxh3", // Confluence fields
 }
 
 type MetaField struct {
@@ -61,8 +61,13 @@ func (c *Client) InitMetadata() error {
 	// Create missing metadata fields
 	for _, field := range metaFields {
 		if _, exists := c.meta[field]; !exists {
+			strType := "string"
+			if field == "last_modified" {
+				// Skip creating the 'id' field as it is a built-in field
+				strType = "number"
+			}
 			response, err := c.CreateMetadata(ctx, CreateMetadataRequest{
-				Type: "string",
+				Type: strType,
 				Name: field,
 			})
 			if err != nil {
@@ -224,7 +229,7 @@ func (c *Client) updateDocumentMetadataByRequest(request UpdateDocumentMetadataR
 // UpdateDocumentMetadata updates document metadata in Dify API and internal cache
 func (c *Client) UpdateDocumentMetadata(documentID string, params DocumentMetadataRecord) error {
 	if record, exists := c.GetDocumentMetadataRecord(documentID); exists {
-		if utils.BeforeRFC3339Times(params.When, record.When) {
+		if record.When != "" && utils.BeforeRFC3339Times(params.When, record.When) {
 			params.When = record.When // Use existing value if the new one is older
 		}
 	}
@@ -314,6 +319,11 @@ func (c *Client) buildApiMetadataPayload(params DocumentMetadataRecord, finalCon
 	c.addMetadataIfValid(&metadataToUpdate, "space_key", params.SpaceKey)
 	c.addMetadataIfValid(&metadataToUpdate, "last_modified_date", params.When) // Use params.When
 	c.addMetadataIfValid(&metadataToUpdate, "xxh3", params.Xxh3)               // Use params.Xxh3
+	if t, err := utils.RFC3339ToUnix(params.When); err == nil {
+		c.addMetadataIfValid(&metadataToUpdate, "last_modified", fmt.Sprintf("%d", t)) // Use params.Xxh3
+	} else {
+		log.Printf("failed to convert last_modified to Unix time: %v", err)
+	}
 
 	// Add Confluence ID metadata ('id' field) if configured and the final value is not empty
 	metaIDFieldID := c.GetMetaID("id") // Dify's internal ID for the 'id' metadata field

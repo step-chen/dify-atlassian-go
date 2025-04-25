@@ -3,11 +3,10 @@ package main
 import (
 	"context"
 	"flag" // Add flag package
-	"fmt"
 	"log"
 	"sync"
-	"time"
 
+	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	confluence_cfg "github.com/step-chen/dify-atlassian-go/internal/config/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
@@ -15,11 +14,9 @@ import (
 )
 
 var (
-	difyClients     map[string]*dify.Client
-	batchPool       *BatchPool
-	timeoutContents map[string]map[string]confluence.ContentOperation // Stores map[spaceKey]map[contentID]confluence.ContentOperation
-	timeoutMutex    sync.Mutex                                        // Mutex for protecting timeoutContents
-	cfg             *confluence_cfg.Config                            // Use the specific Confluence config type
+	difyClients map[string]*dify.Client
+	batchPool   *batchpool.BatchPool
+	cfg         *confluence_cfg.Config // Use the specific Confluence config type
 )
 
 // Application entry point, handles initialization and task processing
@@ -38,13 +35,26 @@ func main() {
 	// Initialize required tools
 	utils.InitRequiredTools()
 
-	// Init timeout contents map
-	timeoutContents = make(map[string]map[string]confluence.ContentOperation)
-
 	// Init batch pool
 	// Use BatchPoolSize for max workers, QueueSize for the internal task queue
 	// Pass the Concurrency part of the loaded config to the constructor
-	batchPool = NewBatchPool(cfg.Concurrency.BatchPoolSize, cfg.Concurrency.QueueSize, statusChecker, cfg.Concurrency)
+	batchPool = batchpool.NewBatchPool(
+		cfg.Concurrency.BatchPoolSize,
+		cfg.Concurrency.QueueSize,
+		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, error) {
+			return difyClients[key].CheckBatchStatus(
+				ctx,
+				key,
+				id,
+				title,
+				batch,
+				op,
+				cfg.Concurrency.IndexingTimeout,
+				cfg.Concurrency.DeleteTimeoutContent,
+			)
+		},
+		cfg.Concurrency,
+	)
 
 	// Run the main processing loop
 	runProcessingLoop()
@@ -117,21 +127,15 @@ func runProcessingLoop() {
 		log.Printf("Batch monitoring complete for run %d.", i+1)
 
 		// Check if there are any timed-out items to retry
-		timeoutMutex.Lock()
-		itemsToRetry := len(timeoutContents) > 0
-		timeoutMutex.Unlock()
-
-		if !itemsToRetry {
+		if !batchPool.HasTimeoutItems() {
 			log.Printf("No timed-out items found after run %d. Processing finished.", i+1)
 			break // Exit retry loop if no timeouts occurred
 		}
 
-		log.Printf("Found %d timed-out items after run %d. Preparing for retry.", len(timeoutContents), i+1)
+		log.Printf("Preparing for retry after run %d.", i+1)
 		// Reset timeoutContents for the next potential retry run (or if this was the last run)
 		// The actual retry logic happens within processSpace based on the timeoutContents populated by statusChecker
-		timeoutMutex.Lock()
-		timeoutContents = make(map[string]map[string]confluence.ContentOperation) // Clear for next retry or final state
-		timeoutMutex.Unlock()
+		batchPool.ClearTimeoutContents()
 
 		if i == cfg.Concurrency.MaxRetries {
 			log.Printf("Max retries (%d) reached. Some items may not have been processed successfully.", cfg.Concurrency.MaxRetries)
@@ -149,75 +153,4 @@ func runProcessingLoop() {
 
 	// Log failed types (remains unchanged)
 	utils.WriteFailedTypesLog()
-}
-
-// Check batch status using Dify client
-// This function is passed to the BatchPool and runs within its workers.
-// It now receives a context from the BatchPool.
-func statusChecker(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error) {
-	// Check for context cancellation first (from BatchPool's task timeout or global shutdown)
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err() // Propagate context error
-	default:
-		// Proceed with status check if context is not done
-	}
-
-	client, exists := difyClients[spaceKey]
-	if !exists {
-		return "", fmt.Errorf("no Dify client for space %s", spaceKey)
-	}
-
-	status, err := client.GetIndexingStatus(spaceKey, batch)
-	if err != nil {
-		if err.Error() == "unexpected status code: 404" {
-			return "completed", nil
-		} else {
-			return "", err
-		}
-	}
-	if len(status.Data) > 0 {
-		if status.Data[0].IndexingStatus == "completed" {
-			return "completed", nil
-		}
-		op.StartAt = status.LastStepAt()
-
-		// Check if ProcessingStartedAt is more than 2 minutes ago
-		if time.Since(op.StartAt) > time.Duration(cfg.Concurrency.IndexingTimeout)*time.Minute {
-			fmt.Println("timeout:", op.StartAt, time.Since(op.StartAt), time.Now())
-
-			if cfg.Concurrency.DeleteTimeoutContent {
-				// Delete the document or update metadata if configured to do so
-				// Pass the confluenceID which is a parameter of statusChecker
-				err := client.DeleteDocument(status.Data[0].ID, confluenceID)
-				if err != nil {
-					// Error message updated to reflect potential metadata update failure too
-					return "", fmt.Errorf("failed to delete/update timeout document %s for %s content %s: %w", status.Data[0].ID, spaceKey, title, err)
-				}
-
-				// Store and log the ID for retry
-				if op.Action == 0 {
-					op.Action = 1 // Mark as needing retry (deletion happened)
-				}
-				timeoutMutex.Lock()
-				if timeoutContents[spaceKey] == nil {
-					timeoutContents[spaceKey] = make(map[string]confluence.ContentOperation)
-				}
-				if status.Data[0].ID != "" {
-					op.DifyID = status.Data[0].ID
-				}
-				timeoutContents[spaceKey][confluenceID] = op
-				timeoutMutex.Unlock()
-
-				return "deleted", nil // Marked as deleted, will be retried later
-			} else {
-				// If not configured to delete, simply mark as completed and don't retry
-				log.Printf("Indexing timed out for %s (%s), but configured not to delete. Marking as completed.", title, confluenceID)
-				return "timeout", nil
-			}
-		}
-		return status.Data[0].IndexingStatus, nil
-	}
-
-	return "", fmt.Errorf("no status data found")
 }

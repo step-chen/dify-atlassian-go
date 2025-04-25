@@ -4,18 +4,19 @@ import (
 	"log"
 	"sync"
 
+	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 )
 
 type Job struct {
-	Type             confluence.ContentType // Type of job
-	DocumentID       string                 // Document ID
-	SpaceKey         string                 // Space key
-	Content          *confluence.Content    // Content to be processed (optional)
-	Client           *dify.Client           // Dify client
-	ConfluenceClient *confluence.Client     // Confluence client (optional)
-	Op               confluence.ContentOperation
+	Type             batchpool.ContentType // Type of job
+	DocumentID       string                // Document ID
+	SpaceKey         string                // Space key
+	Content          *confluence.Content   // Content to be processed (optional)
+	Client           *dify.Client          // Dify client
+	ConfluenceClient *confluence.Client    // Confluence client (optional)
+	Op               batchpool.Operation
 }
 
 type JobChannels struct {
@@ -27,7 +28,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 	for job := range jobChan {
 		// batchPool.WaitForAvailable() // Removed - BatchPool manages worker availability internally
 		switch job.Type {
-		case confluence.ContentTypePage, confluence.ContentTypeAttachment:
+		case batchpool.Page, batchpool.Attachment:
 			switch job.Op.Action {
 			case 0: // Create
 				if err := createDocument(&job); err != nil {

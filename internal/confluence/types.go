@@ -2,14 +2,6 @@ package confluence
 
 import (
 	"net/http"
-	"time"
-)
-
-type ContentType int
-
-const (
-	ContentTypePage ContentType = iota
-	ContentTypeAttachment
 )
 
 type Client struct {
@@ -23,16 +15,6 @@ type Client struct {
 type AttachmentBasicInfo struct {
 	LastModifiedDate string
 	MediaType        string
-}
-
-type ContentOperation struct {
-	Action           int8        // 0: create, 1: update, 2: delete, -1: no action
-	Type             ContentType // 0: page, 1: attachment
-	LastModifiedDate string
-	MediaType        string // Mime type
-	DifyID           string
-	DatasetID        string
-	StartAt          time.Time
 }
 
 type Content struct {

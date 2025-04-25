@@ -1,4 +1,4 @@
-package main
+package batchpool
 
 import (
 	"context"
@@ -11,37 +11,57 @@ import (
 	"time"
 
 	"github.com/step-chen/dify-atlassian-go/internal/config" // Import config package
-	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 )
 
-type Task struct {
-	SpaceKey     string
-	ConfluenceID string
-	Title        string
-	Batch        string
-	Op           confluence.ContentOperation
+type ContentType int
+
+const (
+	Page ContentType = iota
+	Attachment
+)
+
+type Operation struct {
+	Action           int8        // 0: create, 1: update, 2: delete, -1: no action
+	Type             ContentType // 0: page, 1: attachment
+	LastModifiedDate string
+	MediaType        string // Mime type
+	DifyID           string
+	DatasetID        string
+	StartAt          time.Time
 }
 
-type SpaceProgress struct {
+type Task struct {
+	key   string
+	id    string
+	title string
+	batch string
+	op    Operation
+}
+
+type Progress struct {
 	total     atomic.Int32 // Expected total tasks for this space
 	completed atomic.Int32 // Completed tasks for this space
 }
 
 type BatchPool struct {
 	maxWorkers    int
-	statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error)
+	statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, error)
 	taskQueue     chan Task
 	workersWg     sync.WaitGroup // Waits for worker goroutines to finish on Close
 	overallWg     sync.WaitGroup // Waits for all submitted tasks to complete processing
 	stopOnce      sync.Once
 	shutdown      chan struct{}
-	progress      sync.Map // Stores map[string]*SpaceProgress for per-space tracking
+	progress      sync.Map // Stores map[string]*Progress for per-space tracking
 	mu            sync.Mutex
 	totalLen      int            // Max length of total count string across all spaces for formatting
 	cfg           config.ConcCfg // Store only the concurrency config
+
+	// Timeout tracking
+	timeoutContents map[string]map[string]Operation // Stores map[spaceKey]map[contentID]Operation
+	timeoutMutex    sync.Mutex                      // Mutex for protecting timeoutContents
 }
 
-func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, spaceKey, confluenceID, title, batch string, op confluence.ContentOperation) (string, error), concurrencyCfg config.ConcCfg) *BatchPool { // Accept ConcCfg directly
+func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, error), concurrencyCfg config.ConcCfg) *BatchPool { // Accept ConcCfg directly
 	if maxWorkers <= 0 {
 		maxWorkers = 1
 	}
@@ -56,6 +76,7 @@ func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.
 		shutdown:      make(chan struct{}),
 		cfg:           concurrencyCfg, // Store concurrency config
 		// progress is initialized implicitly by sync.Map
+		timeoutContents: make(map[string]map[string]Operation),
 	}
 
 	bp.workersWg.Add(maxWorkers)
@@ -82,19 +103,19 @@ func (bp *BatchPool) worker() {
 	}
 }
 
-func (bp *BatchPool) Add(ctx context.Context, spaceKey, confluenceID, title, content, batch string, op confluence.ContentOperation) error {
+func (bp *BatchPool) Add(ctx context.Context, key, id, title, batch string, op Operation) error {
 	task := Task{
-		SpaceKey:     spaceKey,
-		ConfluenceID: confluenceID,
-		Title:        title,
-		Batch:        batch,
-		Op:           op,
+		key:   key,
+		id:    id,
+		title: title,
+		batch: batch,
+		op:    op,
 	}
 
-	if _, ok := bp.progress.Load(spaceKey); !ok {
-		log.Printf("Warning: Adding task for spaceKey '%s' before SetTotal was called. Progress tracking might be inaccurate.", spaceKey)
+	if _, ok := bp.progress.Load(key); !ok {
+		log.Printf("Warning: Adding task for key '%s' before SetTotal was called. Progress tracking might be inaccurate.", key)
 		// Optionally create a default progress entry here if desired:
-		// bp.progress.LoadOrStore(spaceKey, &SpaceProgress{})
+		// bp.progress.LoadOrStore(spaceKey, &Progress{})
 	}
 
 	bp.overallWg.Add(1) // Increment *before* sending to queue
@@ -111,8 +132,22 @@ func (bp *BatchPool) Add(ctx context.Context, spaceKey, confluenceID, title, con
 	}
 }
 
+// addTimeoutContent safely adds a task's operation to the timeoutContents map
+func (bp *BatchPool) addTimeoutContent(task Task) {
+	bp.timeoutMutex.Lock()
+	defer bp.timeoutMutex.Unlock()
+
+	if bp.timeoutContents[task.key] == nil {
+		bp.timeoutContents[task.key] = make(map[string]Operation)
+	}
+	bp.timeoutContents[task.key][task.id] = task.op
+}
+
 func (bp *BatchPool) monitorBatch(task Task) {
-	taskTimeout := time.Duration(bp.cfg.IndexingTimeout) * time.Minute // Access IndexingTimeout directly
+	taskTimeout := time.Duration(bp.cfg.IndexingTimeout) * time.Minute
+	if taskTimeout <= 0 {
+		taskTimeout = 10 * time.Minute // Default timeout if config is invalid
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout)
 	defer cancel()
 
@@ -120,13 +155,13 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	defer ticker.Stop()
 
 	logPrefix := fmt.Sprintf("Space: %s, DifyID: %s, Title: %s, Batch: %s",
-		task.SpaceKey, task.Op.DifyID, task.Title, task.Batch)
+		task.key, task.op.DifyID, task.title, task.batch)
 
 	taskCompleted := false // Flag to ensure completion logic runs only once
 
 	defer func() {
 		if !taskCompleted {
-			bp.MarkTaskComplete(task.SpaceKey)
+			bp.MarkTaskComplete(task.key)
 			log.Printf("%s - Monitoring ended unexpectedly.", logPrefix)
 		}
 	}()
@@ -134,8 +169,8 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	for {
 		select {
 		case <-ticker.C:
-			status, err := bp.statusChecker(ctx, task.SpaceKey, task.ConfluenceID, task.Title, task.Batch, task.Op)
-			progressStr := bp.ProgressString(task.SpaceKey) // Get current progress string
+			status, err := bp.statusChecker(ctx, task.key, task.id, task.title, task.batch, task.op)
+			progressStr := bp.ProgressString(task.key) // Get current progress string
 
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -147,40 +182,42 @@ func (bp *BatchPool) monitorBatch(task Task) {
 				}
 			} else {
 				if status == "completed" {
-					bp.MarkTaskComplete(task.SpaceKey) // Mark first
+					bp.MarkTaskComplete(task.key) // Mark first
 					// Add chunks using the document name as content after successful creation
 					taskCompleted = true
 					// Read updated progress for logging
-					log.Printf("[SUCCESS] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
+					log.Printf("[SUCCESS] %s - %s", bp.ProgressString(task.key), logPrefix)
 					return
 				} else if status == "deleted" {
-					bp.MarkTaskComplete(task.SpaceKey) // Mark first
+					bp.MarkTaskComplete(task.key) // Mark first
 					taskCompleted = true
-					log.Printf("[DELETED] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
+					log.Printf("[DELETED] %s - %s", bp.ProgressString(task.key), logPrefix)
+					bp.addTimeoutContent(task)
 					return
 				} else if status == "failed" { // Handle explicit failure status
-					bp.MarkTaskComplete(task.SpaceKey) // Mark first
+					bp.MarkTaskComplete(task.key) // Mark first
 					taskCompleted = true
-					log.Printf("[FAILED] %s - %s", bp.ProgressString(task.SpaceKey), logPrefix)
+					log.Printf("[FAILED] %s - %s", bp.ProgressString(task.key), logPrefix)
 					// Optionally record this failure differently than 404
 					return
 				} else if status == "timeout" {
-					if cfg.Concurrency.DeleteTimeoutContent {
-						bp.MarkTaskComplete(task.SpaceKey) // Mark first
+					if bp.cfg.DeleteTimeoutContent {
+						bp.MarkTaskComplete(task.key) // Mark first
 						taskCompleted = true
-						log.Printf("[TIMEOUT] %s - %s.", bp.ProgressString(task.SpaceKey), logPrefix)
+						log.Printf("[TIMEOUT] %s - %s.", bp.ProgressString(task.key), logPrefix)
+						bp.addTimeoutContent(task)
 						return
 					} else {
-						task.Op.StartAt = time.Now() // Update start time for next check
-						log.Printf("[TIMEOUT] %s - %s, indexing timeout, continue check.", bp.ProgressString(task.SpaceKey), logPrefix)
+						task.op.StartAt = time.Now() // Update start time for next check
+						log.Printf("[TIMEOUT] %s - %s, indexing timeout, continue check.", bp.ProgressString(task.key), logPrefix)
 						continue
 					}
 				} else if status == "error" {
-					task.Op.StartAt = time.Now() // Update start time for next check
-					log.Printf("[ERROR] %s - %s, indexing error, continue check.", bp.ProgressString(task.SpaceKey), logPrefix)
+					task.op.StartAt = time.Now() // Update start time for next check
+					log.Printf("[ERROR] %s - %s, indexing error, continue check.", bp.ProgressString(task.key), logPrefix)
 					continue
 				} else if status == "indexing" || status == "waiting" || status == "splitting" || status == "parsing" { // cleaning
-					task.Op.StartAt = time.Now() // Update start time for next check
+					task.op.StartAt = time.Now() // Update start time for next check
 					continue
 				} else {
 					// Handle other statuses as needed
@@ -193,7 +230,7 @@ func (bp *BatchPool) monitorBatch(task Task) {
 
 		case <-ctx.Done():
 			if !taskCompleted { // Check if not already completed by status check
-				log.Printf("[TIMEOUT] %s - %s Monitoring timed out, continue check.", bp.ProgressString(task.SpaceKey), logPrefix)
+				log.Printf("[TIMEOUT] %s - %s Monitoring timed out, continue check.", bp.ProgressString(task.key), logPrefix)
 			}
 			return
 
@@ -202,7 +239,7 @@ func (bp *BatchPool) monitorBatch(task Task) {
 				// Task is aborted. Decide if aborted tasks should count towards completion.
 				// Typically, they might not, so we might *not* call markTaskComplete here.
 				// The overallWg is decremented anyway when the worker exits or handles the next task.
-				log.Printf("[ABORTED] %s - %s Pool shutting down.", bp.ProgressString(task.SpaceKey), logPrefix)
+				log.Printf("[ABORTED] %s - %s Pool shutting down.", bp.ProgressString(task.key), logPrefix)
 			}
 			return
 		default:
@@ -211,25 +248,25 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	}
 }
 
-func (bp *BatchPool) MarkTaskComplete(spaceKey string) {
-	val, ok := bp.progress.Load(spaceKey)
+func (bp *BatchPool) MarkTaskComplete(key string) {
+	val, ok := bp.progress.Load(key)
 	if !ok {
-		log.Printf("Error: Progress entry for spaceKey '%s' not found during completion.", spaceKey)
+		log.Printf("Error: Progress entry for key '%s' not found during completion.", key)
 		// Consider creating a default entry on the fly if needed:
-		// val, _ = bp.progress.LoadOrStore(spaceKey, &SpaceProgress{})
+		// val, _ = bp.progress.LoadOrStore(spaceKey, &Progress{})
 		return // Or handle more gracefully
 	}
-	sp := val.(*SpaceProgress)
+	sp := val.(*Progress)
 	sp.completed.Add(1)
 }
 
-func (bp *BatchPool) SetTotal(spaceKey string, total int) {
+func (bp *BatchPool) SetTotal(key string, total int) {
 	if total < 0 {
 		total = 0
 	}
 
-	val, _ := bp.progress.LoadOrStore(spaceKey, &SpaceProgress{})
-	sp := val.(*SpaceProgress)
+	val, _ := bp.progress.LoadOrStore(key, &Progress{})
+	sp := val.(*Progress)
 
 	sp.total.Store(int32(total))
 	sp.completed.Store(0) // Reset completed count
@@ -242,12 +279,12 @@ func (bp *BatchPool) SetTotal(spaceKey string, total int) {
 	bp.mu.Unlock()
 }
 
-func (bp *BatchPool) ProgressString(spaceKey string) string {
-	val, ok := bp.progress.Load(spaceKey)
+func (bp *BatchPool) ProgressString(key string) string {
+	val, ok := bp.progress.Load(key)
 	if !ok {
 		return "?/?" // Space not initialized via SetTotal
 	}
-	sp := val.(*SpaceProgress)
+	sp := val.(*Progress)
 
 	completed := sp.completed.Load()
 	total := sp.total.Load()
@@ -262,6 +299,18 @@ func (bp *BatchPool) ProgressString(spaceKey string) string {
 
 func (bp *BatchPool) Wait() {
 	bp.overallWg.Wait()
+}
+
+func (bp *BatchPool) HasTimeoutItems() bool {
+	bp.timeoutMutex.Lock()
+	defer bp.timeoutMutex.Unlock()
+	return len(bp.timeoutContents) > 0
+}
+
+func (bp *BatchPool) ClearTimeoutContents() {
+	bp.timeoutMutex.Lock()
+	defer bp.timeoutMutex.Unlock()
+	bp.timeoutContents = make(map[string]map[string]Operation)
 }
 
 func (bp *BatchPool) Close() {

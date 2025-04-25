@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
@@ -59,10 +60,10 @@ func (c *Client) preparePageQuery(req *http.Request, limit string, start string,
 	return req
 }
 
-func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]ContentOperation, err error) {
+func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]batchpool.Operation, err error) {
 	nextPageURL := c.baseURL + "/rest/api/space/" + spaceKey + "/content/page"
 
-	contents = make(map[string]ContentOperation)
+	contents = make(map[string]batchpool.Operation)
 	for nextPageURL != "" {
 		req, err := http.NewRequest("GET", nextPageURL, nil)
 		if err != nil {
@@ -90,7 +91,7 @@ func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]Cont
 
 		for _, content := range result.Results {
 			// Add page content
-			contents[content.ID] = ContentOperation{
+			contents[content.ID] = batchpool.Operation{
 				Action:           0,
 				LastModifiedDate: content.Version.When,
 				Type:             0,
@@ -99,7 +100,7 @@ func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]Cont
 			// Add attachments
 			for _, att := range content.Children.RawAttachment.Results {
 				if !c.unsupportedTypes[att.Metadata.MediaType] {
-					contents[att.ID] = ContentOperation{
+					contents[att.ID] = batchpool.Operation{
 						Action:           0,
 						LastModifiedDate: att.Version.When,
 						Type:             1,

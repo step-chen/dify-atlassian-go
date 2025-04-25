@@ -6,6 +6,7 @@ import (
 	"log" // Added strings import
 	"time"
 
+	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	"github.com/step-chen/dify-atlassian-go/internal/confluence"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
@@ -28,15 +29,19 @@ func processSpace(spaceKey string, client *dify.Client, confluenceClient *conflu
 
 	// Process each content operation
 	for contentID, operation := range contents {
-		if err := processContentOperation(contentID, operation, spaceKey, client, confluenceClient, jobChan); err != nil {
+		if err := processOperation(contentID, operation, spaceKey, client, confluenceClient, jobChan); err != nil {
 			log.Printf("error processing space %s title %s media type %s: %v", spaceKey, contentID, operation.MediaType, err)
 		}
 	}
 
+	log.Printf("=========================================================")
+	log.Printf("All operations for space %s have been processed.", spaceKey)
+	log.Printf("=========================================================")
+
 	return nil
 }
 
-func initOperations(client *dify.Client, contents map[string]confluence.ContentOperation) error {
+func initOperations(client *dify.Client, contents map[string]batchpool.Operation) error {
 	// FetchDocumentsList now returns map[confluenceID]DifyDocumentMetadataRecord
 	// and populates client.metaMapping internally (map[difyID]DifyDocumentMetadataRecord)
 	confluenceIDToDifyRecord, err := client.FetchDocumentsList(0, 100)
@@ -48,7 +53,7 @@ func initOperations(client *dify.Client, contents map[string]confluence.ContentO
 	for contentID, record := range confluenceIDToDifyRecord {
 		if op, ok := contents[contentID]; !ok {
 			// Add new operation for unmapped content
-			contents[contentID] = confluence.ContentOperation{
+			contents[contentID] = batchpool.Operation{
 				Action:    2, // Delete
 				DifyID:    record.DifyID,
 				DatasetID: client.DatasetID(),
@@ -77,8 +82,8 @@ func initOperations(client *dify.Client, contents map[string]confluence.ContentO
 	return nil
 }
 
-// processContentOperation handles individual content operations based on type and action
-func processContentOperation(contentID string, operation confluence.ContentOperation, spaceKey string, client *dify.Client, confluenceClient *confluence.Client, jobChan *JobChannels) error {
+// processOperation handles individual content operations based on type and action
+func processOperation(contentID string, operation batchpool.Operation, spaceKey string, client *dify.Client, confluenceClient *confluence.Client, jobChan *JobChannels) error {
 	j := Job{
 		Type:             operation.Type,
 		DocumentID:       operation.DifyID,
@@ -195,7 +200,7 @@ func createDocument(j *Job) error {
 
 	// Add document to batch pool for indexing tracking
 	// Add context.Background() as the first argument
-	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, j.Content.Content, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
 	if err != nil {
 		// Log error if adding to the pool fails (e.g., pool shutdown)
 		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
@@ -239,7 +244,7 @@ func updateDocument(j *Job) error {
 
 	// Add document to batch pool for indexing tracking
 	// Add context.Background() as the first argument
-	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, j.Content.Content, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
 	if err != nil {
 		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
 	}
@@ -250,7 +255,7 @@ func updateDocument(j *Job) error {
 func deleteDocument(j *Job) error {
 	// Determine the Confluence ID based on the job type
 	var confluenceID string
-	if j.Type == confluence.ContentTypePage && j.Content != nil { // Changed JobTypePage to ContentTypePage
+	if j.Type == batchpool.Page && j.Content != nil { // Changed JobTypePage to ContentTypePage
 		confluenceID = j.Content.ID
 	} else {
 		// Should not happen if job is constructed correctly
