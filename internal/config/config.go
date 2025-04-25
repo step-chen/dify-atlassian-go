@@ -6,21 +6,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
-	"os"
-
-	"gopkg.in/yaml.v2"
 )
 
-// Config contains all application configuration settings
-// Confluence: Configuration for Confluence API integration
-// Concurrency: Settings for concurrent processing
-// Dify: Configuration for Dify API integration
-// AllowedTypes: Map of supported media types
-// UnsupportedTypes: Map of unsupported media types
 type Config struct {
-	// Confluence field removed - handled by specific command configs now
 	Concurrency      ConcCfg         `yaml:"concurrency"`       // Concurrency settings
 	Dify             DifyCfg         `yaml:"dify"`              // Dify API configuration
 	AllowedTypes     map[string]bool `yaml:"allowed_types"`     // Allowed media types for attachments
@@ -131,44 +120,6 @@ type RagSetting struct {
 // WARNING: This encryption key should be securely stored and rotated periodically
 // Consider using a key management system for production environments
 var encryptionKey = []byte("32-byte-long-encryption-key-here")
-
-// LoadConfig reads, validates and decrypts configuration
-// path: Path to YAML configuration file
-// Returns parsed configuration or error
-// Parameters:
-//   - path: Path to the configuration file
-//
-// Returns:
-//   - *Config: Loaded configuration
-//   - error: Any error that occurred during loading
-//
-// The function also decrypts the Confluence API key during loading
-func LoadConfig(path string) (*Config, error) {
-	configData, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %v", err)
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(configData, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %v", err)
-	}
-
-	// Decryption logic for Confluence API key removed - handled in confluence.LoadConfig now
-
-	// If concurrency is not enabled, set single-thread mode
-	if !cfg.Concurrency.Enabled {
-		cfg.Concurrency.Workers = 1
-		cfg.Concurrency.QueueSize = 1
-	}
-
-	// Set default batch pool size if not specified
-	if cfg.Concurrency.BatchPoolSize == 0 {
-		cfg.Concurrency.BatchPoolSize = 10
-	}
-
-	return &cfg, nil
-}
 
 // Encrypt securely encrypts text using AES-256
 // plaintext: Text to encrypt

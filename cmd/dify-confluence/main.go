@@ -69,7 +69,7 @@ func main() {
 func runProcessingLoop() {
 	// Init Dify clients per space
 	difyClients = make(map[string]*dify.Client)
-	for _, spaceKey := range cfg.ConfluenceSettings.SpaceKeys { // Use ConfluenceSettings
+	for _, spaceKey := range cfg.Confluence.SpaceKeys { // Use ConfluenceSettings
 		datasetID, exists := cfg.Dify.Datasets[spaceKey]
 		if !exists {
 			log.Fatalf("no dataset mapping configured for space key: %s", spaceKey)
@@ -88,7 +88,7 @@ func runProcessingLoop() {
 	}
 
 	// Init Confluence client
-	confluenceClient, err := confluence.NewClient(cfg.ConfluenceSettings.BaseURL, cfg.ConfluenceSettings.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes) // Use ConfluenceSettings
+	confluenceClient, err := confluence.NewClient(cfg.Confluence.BaseURL, cfg.Confluence.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes) // Use ConfluenceSettings
 	if err != nil {
 		log.Fatalf("failed to create Confluence client: %v", err)
 	}
@@ -110,7 +110,7 @@ func runProcessingLoop() {
 		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
 
 		// Process all spaces
-		for _, spaceKey := range cfg.ConfluenceSettings.SpaceKeys { // Use ConfluenceSettings
+		for _, spaceKey := range cfg.Confluence.SpaceKeys { // Use ConfluenceSettings
 			c, exists := difyClients[spaceKey]
 			if !exists {
 				log.Printf("Warning: Dify client not found for space %s during processing run %d. Skipping.", spaceKey, i+1)

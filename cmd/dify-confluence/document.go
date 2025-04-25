@@ -98,12 +98,12 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 
 	switch operation.Type {
 	case 0: // page
-		content, err = confluenceClient.GetContent(contentID, cfg.ConfluenceSettings.OnlyTitle)
+		content, err = confluenceClient.GetContent(contentID, cfg.Confluence.OnlyTitle)
 		if err != nil {
 			return fmt.Errorf("failed to get content %s: %w", contentID, err)
 		}
 	case 1: // attachment
-		content, err = confluenceClient.GetAttachment(contentID, cfg.ConfluenceSettings.OnlyTitle)
+		content, err = confluenceClient.GetAttachment(contentID, cfg.Confluence.OnlyTitle)
 		if err != nil {
 			return fmt.Errorf("failed to get attachment %s: %w", contentID, err)
 		}

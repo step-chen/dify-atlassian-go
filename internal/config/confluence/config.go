@@ -5,29 +5,20 @@ import (
 	"os"
 
 	"github.com/step-chen/dify-atlassian-go/internal/config" // Import the parent config package
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 // Config contains settings specific to Confluence processing
 type Config struct {
-	BaseConfig         `yaml:",inline"`   // Embed common settings
-	ConfluenceSettings ConfluenceSettings `yaml:"confluence"`        // Confluence specific settings
-	AllowedTypes       map[string]bool    `yaml:"allowed_types"`     // Allowed media types for attachments (Moved here for context)
-	UnsupportedTypes   map[string]bool    `yaml:"unsupported_types"` // Unsupported media types (Moved here for context)
-}
-
-// BaseConfig holds common configuration sections used by different commands
-// It references types defined in the parent config package.
-type BaseConfig struct {
-	Concurrency config.ConcCfg `yaml:"concurrency"` // Concurrency settings from parent config
-	Dify        config.DifyCfg `yaml:"dify"`        // Dify API configuration from parent config
+	config.Config `yaml:",inline"` // Embed common settings from parent config
+	Confluence    Confluence       `yaml:"confluence"` // Confluence specific settings
 }
 
 // ConfluenceSettings contains Confluence API integration settings
 // BaseURL: Confluence API endpoint
 // APIKey: Authentication key
 // SpaceKeys: List of spaces to process
-type ConfluenceSettings struct {
+type Confluence struct {
 	BaseURL   string   `yaml:"base_url"`   // Base URL for Confluence API
 	APIKey    string   `yaml:"api_key"`    // API key for authentication (encrypted)
 	SpaceKeys []string `yaml:"space_keys"` // List of space keys to process
@@ -59,14 +50,14 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	// Decrypt Confluence API Key using the Decrypt function from the parent config package
-	if cfg.ConfluenceSettings.APIKey != "" {
+	if cfg.Confluence.APIKey != "" {
 		// Use config.Decrypt from the imported parent package
-		decryptedKey, err := config.Decrypt(cfg.ConfluenceSettings.APIKey)
+		decryptedKey, err := config.Decrypt(cfg.Confluence.APIKey)
 		if err != nil {
 			// Handle decryption failure
 			return nil, fmt.Errorf("failed to decrypt Confluence API key from '%s': %v", path, err)
 		}
-		cfg.ConfluenceSettings.APIKey = decryptedKey
+		cfg.Confluence.APIKey = decryptedKey
 	} else {
 		return nil, fmt.Errorf("Confluence API key is missing in the configuration file '%s'", path)
 	}
@@ -100,10 +91,10 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	// Validate essential Confluence settings
-	if cfg.ConfluenceSettings.BaseURL == "" {
+	if cfg.Confluence.BaseURL == "" {
 		return nil, fmt.Errorf("Confluence base_url is missing in '%s'", path)
 	}
-	if len(cfg.ConfluenceSettings.SpaceKeys) == 0 {
+	if len(cfg.Confluence.SpaceKeys) == 0 {
 		return nil, fmt.Errorf("no Confluence space_keys configured in '%s'", path)
 	}
 
@@ -111,7 +102,7 @@ func LoadConfig(path string) (*Config, error) {
 	if len(cfg.Dify.Datasets) == 0 {
 		return nil, fmt.Errorf("no Dify dataset mappings configured in '%s'", path)
 	}
-	for _, spaceKey := range cfg.ConfluenceSettings.SpaceKeys {
+	for _, spaceKey := range cfg.Confluence.SpaceKeys {
 		if _, exists := cfg.Dify.Datasets[spaceKey]; !exists {
 			return nil, fmt.Errorf("no dataset_id configured for space key '%s' in '%s'", spaceKey, path)
 		}
