@@ -11,6 +11,10 @@ const (
 	MarkitdownRepo    = ".markitdown"                                 // Local directory for markitdown repository
 	MarkitdownRepoURL = "https://github.com/microsoft/markitdown.git" // Markitdown repository URL
 	MarkitdownImage   = "markitdown:latest"
+
+	ToolMarkitdown = 1 << iota
+	ToolPandoc
+	ToolGit
 )
 
 type DockerUtils struct {
@@ -40,9 +44,32 @@ func PullImage(imageName string) error {
 	return cmd.Run()
 }
 
-func InitRequiredTools() {
-	checkMarkitdownImage()
-	checkPandoc()
+func InitRequiredTools(tools int) {
+	if tools&ToolMarkitdown != 0 {
+		checkMarkitdownImage()
+	}
+	if tools&ToolPandoc != 0 {
+		checkPandoc()
+	}
+	if tools&ToolGit != 0 {
+		checkGit()
+	}
+}
+
+func checkGit() {
+	if _, err := exec.LookPath("git"); err != nil {
+		log.Fatalln("git command not found:", err)
+		return
+	}
+
+	cmd := exec.Command("git", "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Fatalln("failed to get git version:", err)
+		return
+	}
+
+	log.Println("support", strings.TrimSpace(string(output)))
 }
 
 func checkPandoc() {

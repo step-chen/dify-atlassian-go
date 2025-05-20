@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
-	"flag" // Add flag package
+	"flag"
 	"log"
 	"sync"
 
 	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
-	confluence_cfg "github.com/step-chen/dify-atlassian-go/internal/config/confluence"
-	"github.com/step-chen/dify-atlassian-go/internal/confluence"
+	directory_cfg "github.com/step-chen/dify-atlassian-go/internal/config/directory"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
@@ -16,18 +15,17 @@ import (
 var (
 	difyClients map[string]*dify.Client
 	batchPool   *batchpool.BatchPool
-	cfg         *confluence_cfg.Config // Use the specific Confluence config type
+	cfg         *directory_cfg.Config
 )
 
-// Application entry point, handles initialization and task processing
 func main() {
 	// Define command-line flag for config file path
 	configFile := flag.String("c", "config.yaml", "Path to the configuration file")
-	flag.Parse() // Parse command-line flags
+	flag.Parse()
 
-	// Load config file using the confluence config loader
+	// Load config file using the directory config loader
 	var err error
-	cfg, err = confluence_cfg.LoadConfig(*configFile) // Use the flag value
+	cfg, err = directory_cfg.LoadConfig(*configFile)
 	if err != nil {
 		log.Fatalf("Failed to load config from %s: %v", *configFile, err)
 	}
@@ -35,9 +33,7 @@ func main() {
 	// Initialize required tools
 	utils.InitRequiredTools(utils.ToolMarkitdown | utils.ToolPandoc)
 
-	// Init batch pool
-	// Use BatchPoolSize for max workers, QueueSize for the internal task queue
-	// Pass the Concurrency part of the loaded config to the constructor
+	// Initialize batch pool
 	batchPool = batchpool.NewBatchPool(
 		cfg.Concurrency.BatchPoolSize,
 		cfg.Concurrency.QueueSize,
@@ -65,32 +61,25 @@ func main() {
 	log.Println("Processing complete.")
 }
 
-// runProcessingLoop initializes clients, workers, and manages the space processing loop with retries.
 func runProcessingLoop() {
-	// Init Dify clients per space
+	// Init Dify clients per directory
 	difyClients = make(map[string]*dify.Client)
-	for _, spaceKey := range cfg.Confluence.SpaceKeys { // Use ConfluenceSettings
-		datasetID, exists := cfg.Dify.Datasets[spaceKey]
+	for dirKey := range cfg.Directory.Path {
+		datasetID, exists := cfg.Dify.Datasets[dirKey]
 		if !exists {
-			log.Fatalf("no dataset mapping configured for space key: %s", spaceKey)
+			log.Fatalf("no dataset mapping configured for directory key: %s", dirKey)
 		}
 		if datasetID == "" {
-			log.Fatalf("dataset_id is missing for space key: %s", spaceKey)
+			log.Fatalf("dataset_id is missing for directory key: %s", dirKey)
 		}
 		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
 		if err != nil {
-			log.Fatalf("failed to create Dify client for space %s (dataset %s): %v", spaceKey, datasetID, err)
+			log.Fatalf("failed to create Dify client for directory %s (dataset %s): %v", dirKey, datasetID, err)
 		}
 		if err = client.InitMetadata(); err != nil {
-			log.Fatalf("failed to initialize metadata for space %s: %v", spaceKey, err)
+			log.Fatalf("failed to initialize metadata for directory %s: %v", dirKey, err)
 		}
-		difyClients[spaceKey] = client
-	}
-
-	// Init Confluence client
-	confluenceClient, err := confluence.NewClient(cfg.Confluence.BaseURL, cfg.Confluence.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes) // Use ConfluenceSettings
-	if err != nil {
-		log.Fatalf("failed to create Confluence client: %v", err)
+		difyClients[dirKey] = client
 	}
 
 	// Create worker pool with queue size
@@ -105,23 +94,23 @@ func runProcessingLoop() {
 		go worker(jobChannels.Jobs, &wg)
 	}
 
-	// Process spaces with retries
+	// Process directories with retries
 	for i := 0; i < cfg.Concurrency.MaxRetries+1; i++ {
-		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
+		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout
 
-		// Process all spaces
-		for _, spaceKey := range cfg.Confluence.SpaceKeys { // Use ConfluenceSettings
-			c, exists := difyClients[spaceKey]
+		// Process all directories
+		for dirKey, dirPath := range cfg.Directory.Path {
+			c, exists := difyClients[dirKey]
 			if !exists {
-				log.Printf("Warning: Dify client not found for space %s during processing run %d. Skipping.", spaceKey, i+1)
+				log.Printf("Warning: Dify client not found for directory %s during processing run %d. Skipping.", dirKey, i+1)
 				continue
 			}
-			if err := processSpace(spaceKey, c, confluenceClient, &jobChannels); err != nil {
-				log.Printf("error processing space %s during run %d: %v", spaceKey, i+1, err)
+			if err := processDirectory(dirKey, dirPath, c, &jobChannels); err != nil {
+				log.Printf("error processing directory %s during run %d: %v", dirKey, i+1, err)
 			}
 		}
 
-		// Wait for batch monitoring tasks from this run to complete
+		// Wait for batch monitoring tasks to complete
 		log.Printf("Waiting for batch monitoring tasks to complete for run %d...", i+1)
 		batchPool.Wait()
 		log.Printf("Batch monitoring complete for run %d.", i+1)
@@ -129,12 +118,10 @@ func runProcessingLoop() {
 		// Check if there are any timed-out items to retry
 		if !batchPool.HasTimeoutItems() {
 			log.Printf("No timed-out items found after run %d. Processing finished.", i+1)
-			break // Exit retry loop if no timeouts occurred
+			break
 		}
 
 		log.Printf("Preparing for retry after run %d.", i+1)
-		// Reset timeoutContents for the next potential retry run (or if this was the last run)
-		// The actual retry logic happens within processSpace based on the timeoutContents populated by statusChecker
 		batchPool.ClearTimeoutContents()
 
 		if i == cfg.Concurrency.MaxRetries {
@@ -142,15 +129,15 @@ func runProcessingLoop() {
 		}
 	}
 
-	// Close the job channel *after* submitting initial jobs AND all retry jobs
+	// Close the job channel
 	log.Println("Closing job channel...")
 	close(jobChannels.Jobs)
 
-	// Wait for all worker goroutines to finish processing ALL jobs (initial + retries)
+	// Wait for all workers to complete
 	log.Println("Waiting for all workers to complete...")
 	wg.Wait()
 	log.Println("All workers finished.")
 
-	// Log failed types (remains unchanged)
+	// Log failed types
 	utils.WriteFailedTypesLog()
 }

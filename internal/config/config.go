@@ -9,11 +9,18 @@ import (
 	"io"
 )
 
+// LogConfig defines logging configuration
+type LogConfig struct {
+	Level  string `yaml:"level"`  // Log level (debug, info, warn, error)
+	Format string `yaml:"format"` // Log format (text, json)
+}
+
 type Config struct {
 	Concurrency      ConcCfg         `yaml:"concurrency"`       // Concurrency settings
 	Dify             DifyCfg         `yaml:"dify"`              // Dify API configuration
 	AllowedTypes     map[string]bool `yaml:"allowed_types"`     // Allowed media types for attachments
 	UnsupportedTypes map[string]bool `yaml:"unsupported_types"` // Unsupported media types
+	Log              LogConfig       `yaml:"log"`               // Logging configuration
 }
 
 // GetDifyConfig returns the Dify configuration part.

@@ -168,7 +168,7 @@ func (c *Client) GetContent(contentID string, onlyTitle bool) (*Content, error) 
 
 	if onlyTitle {
 		content.Content = utils.FormatTitle(rawContent.Title)
-		content.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(content.Content))
+		content.Xxh3 = utils.XXH3Hash(content.Content)
 	} else {
 		md := ""
 		if rawContent.Body.View.Value == "" {
@@ -180,7 +180,7 @@ func (c *Client) GetContent(contentID string, onlyTitle bool) (*Content, error) 
 		}
 		if md != "" && md != "{}" {
 			content.Content = utils.EnsureTitleInContent(md, rawContent.Title, "# ", "\n\n")
-			content.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(content.Content))
+			content.Xxh3 = utils.XXH3Hash(content.Content)
 		} else {
 			content.Content = ""
 		}
@@ -226,7 +226,7 @@ func (c *Client) GetAttachment(attachmentID string, onlyTitle bool) (*Content, e
 
 	if onlyTitle {
 		a.Content = utils.FormatTitle(utils.RemoveFileExtension(a.Title))
-		a.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(a.Content))
+		a.Xxh3 = utils.XXH3Hash(a.Content)
 	} else {
 		md := ""
 		if md, err = utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType); err != nil {
@@ -234,7 +234,7 @@ func (c *Client) GetAttachment(attachmentID string, onlyTitle bool) (*Content, e
 		}
 		if md != "" && md != "{}" {
 			a.Content = utils.EnsureTitleInContent(md, utils.RemoveFileExtension(a.Title), "# ", "\n\n")
-			a.Xxh3 = fmt.Sprintf("%d", utils.XXH3Hash(a.Content))
+			a.Xxh3 = utils.XXH3Hash(a.Content)
 		}
 	}
 

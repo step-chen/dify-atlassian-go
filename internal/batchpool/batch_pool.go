@@ -18,6 +18,8 @@ type ContentType int
 const (
 	Page ContentType = iota
 	Attachment
+	Code
+	LocalFile
 )
 
 type Operation struct {

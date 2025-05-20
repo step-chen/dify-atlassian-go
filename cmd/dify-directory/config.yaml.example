@@ -1,0 +1,114 @@
+# Directory configuration
+directory:
+  # Path to the directory to process
+  path: 
+    dir1: /path/to/your/dir1
+    dir2: /path/to/your/dir2
+
+# Concurrency configuration
+concurrency:
+  # Whether concurrency is enabled
+  enabled: true
+  # Number of concurrent content workers
+  workers: 2
+  # Size of the content processing queue
+  queue_size: 4
+  # Maximum number of batches in the global pool
+  batch_pool_size: 10
+  # Timeout for document indexing (in minutes)
+  indexing_timeout: 10
+  # Maximum number of retries for timeout documents
+  max_retries: 0
+  # Whether to delete the document in Dify if indexing times out
+  delete_timeout_content: false
+# Dify configuration
+dify:
+  # Base URL of the Dify API
+  base_url: http://example.com/v1
+  # API key for Dify authentication
+  api_key: your-api-key-here
+  # Mapping of space keys to dataset IDs
+  datasets:
+    dir1: your-dataset-id-here
+    dir2: your-dataset-id-here
+  rag_setting:
+    # Document indexing technique (high_quality, economy)
+    indexing_technique: high_quality
+    # Document form (hierarchical_model, qa_model, text_model)  
+    doc_form: hierarchical_model
+    # Process rules configuration
+    process_rule:
+      mode: custom
+      rules:
+        pre_processing_rules:
+          - id: remove_extra_spaces
+            enabled: true
+          - id: remove_urls_emails
+            enabled: false
+        segmentation:
+          separator: '***###***'
+          max_tokens: 4000
+        parent_mode: paragraph
+        subchunk_segmentation:
+          separator: '\n'
+          max_tokens: 1024
+          chunk_overlap: 256
+
+# Allowed media types for attachments
+allowed_types:
+  text/plain: true
+  text/markdown: true
+  text/x-markdown: true
+  application/pdf: true
+  text/html: true
+  application/vnd.openxmlformats-officedocument.wordprocessingml.document: true
+  application/vnd.ms-powerpoint: true
+  application/vnd.openxmlformats-officedocument.presentationml.presentation: true
+  application/vnd.ms-powerpoint.presentation: true
+  application/vnd.ms-powerpoint.slideshow: true
+  application/vnd.ms-powerpoint.template: true  #application/vnd.oasis.opendocument.text: true
+  #application/vnd.oasis.opendocument.spreadsheet: true
+
+# Unsupported media types that will be skipped during processing
+unsupported_types:
+  application/octet-stream: true
+  application/x-msdownload: true
+  application/x-shockwave-flash: true
+  application/x-tar: true
+  application/zip: true
+  application/x-rar-compressed: true
+  application/x-7z-compressed: true
+  application/x-bzip2: true
+  application/x-gzip: true
+  image/jpeg: true
+  image/png: true
+  image/gif: true
+  image/bmp: true
+  image/webp: true
+  application/vnd.oasis.opendocument.spreadsheet: true
+  application/vnd.oasis.opendocument.presentation: true
+  application/vnd.oasis.opendocument.graphics: true
+  application/msword: true
+  text/xml: true
+  application/xml: true
+  image/svg+xml: true
+  application/vnd.jgraph.mxfile: true
+  video/quicktime: true
+  video/mp4: true
+  video/webm: true
+  video/x-msvideo: true
+  audio/mpeg: true
+  audio/wav: true
+  application/vnd.visio: true
+  application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: true
+  application/vnd.ms-excel: true
+  text/csv: true
+  video/x-m4v: true
+  application/x-rar: true
+  application/vnd.rar: true
+  application/vnd.debian.binary-package: true
+
+# Logging configuration
+log:
+  level: info # debug, info, warn, error
+  format: text # text, json

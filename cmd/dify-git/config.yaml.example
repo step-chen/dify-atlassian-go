@@ -1,0 +1,48 @@
+# Dify API configuration
+dify:
+  baseUrl: ${DIFY_BASE_URL} # e.g., https://api.dify.ai/v1
+  apiKey: ${DIFY_API_KEY}
+  datasetId: ${DIFY_DATASET_ID}
+
+# Bitbucket Cloud configuration
+git:
+  baseUrl: https://api.bitbucket.org/2.0 # Default Git API base URL
+  username: ${GIT_USERNAME} # Your Git username
+  appPassword: ${BITBUCKET_APP_PASSWORD} # An App Password with necessary repository read permissions
+  workspace: ${BITBUCKET_WORKSPACE} # The workspace ID or slug containing the repositories
+  # Optional: Specify repositories to sync. If empty, syncs all accessible repositories in the workspace.
+  repositories:
+    # - repo_slug_1
+    # - repo_slug_2
+  # Specify file extensions to include (case-insensitive). Only files with these extensions will be synced.
+  fileExtensions:
+    - ".c"
+    - ".h"
+    - ".cpp"
+    - ".hpp"
+    - ".rb"
+    - ".py"
+  # Optional: Specify paths (glob patterns) to exclude.
+  excludePaths:
+    # - "**/vendor/**"
+    # - "**/node_modules/**"
+    # - "**/*.min.js"
+
+# Worker configuration
+worker:
+  # Number of concurrent workers fetching from Bitbucket and uploading to Dify
+  concurrency: 5
+  # Maximum number of documents to process in a single batch
+  batchSize: 100
+  # Interval for checking Bitbucket for updates (e.g., "1h", "30m")
+  # Set to "0" or omit to run only once.
+  checkInterval: "1h"
+  # Optional: Time range for fetching initial documents (ISO 8601 format or relative duration like "7d")
+  # If not set, fetches all relevant files.
+  # initialFetchFrom: "2023-01-01T00:00:00Z"
+  # initialFetchFrom: "30d" # Fetch files modified in the last 30 days initially
+
+# Logging configuration
+log:
+  level: info # debug, info, warn, error
+  format: text # text, json

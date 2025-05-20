@@ -108,5 +108,13 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	// Set default log level and format if not specified
+	if cfg.Log.Level == "" {
+		cfg.Log.Level = "info"
+	}
+	if cfg.Log.Format == "" {
+		cfg.Log.Format = "text"
+	}
+
 	return &cfg, nil
 }

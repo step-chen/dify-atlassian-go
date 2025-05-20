@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,9 +16,28 @@ import (
 	"sync"
 	"time"
 	"unicode"
-
-	"github.com/cespare/xxhash/v2"
 )
+
+// GetMIMEType returns the MIME type based on file extension
+func GetMIMEType(path string) string {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return "application/octet-stream"
+	}
+
+	// Lookup MIME type by extension
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		return "application/octet-stream"
+	}
+
+	// Remove any charset parameters
+	if i := strings.IndexByte(mimeType, ';'); i >= 0 {
+		mimeType = mimeType[:i]
+	}
+
+	return mimeType
+}
 
 var (
 	failedTypes   = make(map[string]bool) // Track failed media types
@@ -194,22 +214,33 @@ func convert2MarkdownByMarkitdown(inputPath *string) (string, error) {
 }
 
 func ConvertWithPandoc(inputPath string) (string, error) {
-	outputExt := ".md"
-	outputPath := inputPath[:len(inputPath)-len(filepath.Ext(inputPath))] + outputExt
-
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	// Use a timeout, matching the error message duration
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "pandoc", "-t", "markdown", inputPath, "-o", outputPath)
+	// Pandoc command: convert to markdown (-t markdown).
+	// Output is sent to stdout because -o is not specified.
+	cmd := exec.CommandContext(ctx, "pandoc", "-t", "markdown", inputPath)
+
+	// Run the command and capture combined stdout/stderr.
+	// On success, the markdown content will be in 'output'.
+	// On failure, error messages/details might be in 'output' as well.
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return outputPath, fmt.Errorf("pandoc conversion timed out after 30 seconds")
-		}
-		return outputPath, fmt.Errorf("pandoc conversion failed: %w, output: %s", err, string(output))
+
+	// Check for context timeout error first
+	if ctx.Err() == context.DeadlineExceeded {
+		// Return an empty string and a timeout error
+		return "", fmt.Errorf("pandoc conversion of %s timed out after 30 seconds", inputPath)
 	}
 
-	return outputPath, nil
+	// Check for other execution errors (e.g., pandoc not found, conversion error)
+	if err != nil {
+		// Return an empty string and a detailed error, including Pandoc's output for debugging
+		return "", fmt.Errorf("pandoc conversion of %s failed: %w, output: %s", inputPath, err, string(output))
+	}
+
+	// If the command was successful, the captured output is the markdown content
+	return string(output), nil
 }
 
 func ConvertWithMarkitdown(inputPath string) (string, error) {
@@ -393,7 +424,26 @@ func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string) (string,
 	return "", fmt.Errorf("failed to convert file to Markdown: %w", conversionErr)
 }
 
-// XXH3Hash generates XXH3 hash for the input text
-func XXH3Hash(text string) uint64 {
-	return xxhash.Sum64String(text)
+// PrepareLocalFileMarkdown converts a local file to markdown format
+func PrepareLocalFileMarkdown(filePath string) (string, error) {
+	// Fallback to Pandoc if Markitdown fails
+	if dockerUtils.pandocImage {
+		markdown, err := ConvertWithPandoc(filePath)
+		if err == nil {
+			return markdown, nil
+		}
+		log.Printf("pandoc conversion failed for file %s: %v", filePath, err)
+	}
+
+	// Try Markitdown first if image is available
+	if dockerUtils.markitdownImage {
+		markdown, err := convert2MarkdownByMarkitdown(&filePath)
+		if err == nil {
+			return markdown, nil
+		}
+		log.Printf("markitdown conversion failed for file %s: %v", filePath, err)
+	}
+
+	// If all conversions failed, return error
+	return "", fmt.Errorf("failed to convert file %s to markdown", filePath)
 }
