@@ -9,6 +9,7 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	directory_cfg "github.com/step-chen/dify-atlassian-go/internal/config/directory"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
+
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 

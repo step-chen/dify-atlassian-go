@@ -57,29 +57,29 @@ func WriteFailedTypesLog() {
 	}
 }
 
-func FormatContent(s string) string {
-	s = TrimString(s)
+func formatContent(s string, separator string) string {
+	s = trimString(s)
 	s = strings.TrimLeft(s, ".")
+	s = strings.TrimSuffix(s, "{}")
 
-	if strings.HasSuffix(s, "{}") {
-		s = s[:len(s)-2]
+	if separator != "" {
+		re := regexp.MustCompile(`(?m)^(##)\s+`)
+		s = re.ReplaceAllString(s, separator+"\n## ")
+		re = regexp.MustCompile(`(?m)^(#)\s+`)
+		s = re.ReplaceAllString(s, separator+"\n# ")
 	}
-	re := regexp.MustCompile(`(?m)^(##)\s+`)
-	s = re.ReplaceAllString(s, "***###***\n## ")
-	re = regexp.MustCompile(`(?m)^(#)\s+`)
-	s = re.ReplaceAllString(s, "***###***\n# ")
 
 	// Trim leading and trailing whitespace and non-printable characters
-	return TrimString(s)
+	return trimString(s)
 }
 
 func FormatTitle(s string) string {
-	s = TrimString(s)
+	s = trimString(s)
 	s = strings.TrimLeft(s, ".")
 	// Replace underscores with spaces
-	s = ReplaceUnderscoresWithSpaces(s)
+	s = replaceUnderscoresWithSpaces(s)
 	// Trim leading and trailing whitespace and non-printable characters
-	return TrimString(s)
+	return trimString(s)
 }
 
 // EnsureTitleInMarkdown ensures the markdown content starts with the title
@@ -95,7 +95,7 @@ func EnsureTitleInContent(content, title, prefix, suffix string) string {
 
 // TrimString removes leading and trailing meaningless characters from the input string
 // including whitespace, control characters, and other non-printable characters
-func TrimString(s string) string {
+func trimString(s string) string {
 	return strings.TrimFunc(s, func(r rune) bool {
 		// Remove spaces, control characters, and other non-printable characters
 		return unicode.IsSpace(r) || !unicode.IsGraphic(r)
@@ -103,7 +103,7 @@ func TrimString(s string) string {
 }
 
 // ReplaceUnderscoresWithSpaces replaces all underscores in the input string with spaces
-func ReplaceUnderscoresWithSpaces(s string) string {
+func replaceUnderscoresWithSpaces(s string) string {
 	return strings.ReplaceAll(s, "_", " ")
 }
 
@@ -128,7 +128,7 @@ func generateTempFileName(fileName string) string {
 // convertToMarkdown calls pandoc to convert the specified file to Markdown text
 // inputFilePath: path to the file to be converted
 // Returns the converted Markdown string and a potential error
-func convert2MarkdownByPandoc(inputFilePath *string) (string, error) {
+func convert2MarkdownByPandoc(inputFilePath *string, separator string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
@@ -145,7 +145,7 @@ func convert2MarkdownByPandoc(inputFilePath *string) (string, error) {
 		return "", fmt.Errorf("pandoc execution failed: %w\nstderr: %s", err, stderr.String())
 	}
 
-	return FormatContent(stdout.String()), nil
+	return formatContent(stdout.String(), separator), nil
 }
 
 func convert2DocxByPandoc(inputFilePath *string) (string, error) {
@@ -173,7 +173,7 @@ func convert2DocxByPandoc(inputFilePath *string) (string, error) {
 	return outputFilePath, nil
 }
 
-func convert2MarkdownByMarkitdown(inputPath *string) (string, error) {
+func convert2MarkdownByMarkitdown(inputPath *string, separator string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
@@ -205,12 +205,12 @@ func convert2MarkdownByMarkitdown(inputPath *string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("%s", stderr.String())
 			} else {
-				return convert2MarkdownByMarkitdown(&fp)
+				return convert2MarkdownByMarkitdown(&fp, separator)
 			}
 		}
 	}
 
-	return FormatContent(stdout.String()), nil
+	return formatContent(stdout.String(), separator), nil
 }
 
 func ConvertWithPandoc(inputPath string) (string, error) {
@@ -282,7 +282,7 @@ func ConvertWithMarkitdown(inputPath string) (string, error) {
 }
 
 // ConvertHTMLToMarkdown converts an HTML string to Markdown using the markitdown Docker image.
-func ConvertHTMLToMarkdown(htmlContent string) (string, error) {
+func ConvertHTMLToMarkdown(htmlContent string, separator string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second) // 5-minute timeout
 	defer cancel()
 
@@ -315,7 +315,7 @@ func ConvertHTMLToMarkdown(htmlContent string) (string, error) {
 	}
 
 	// Return the converted markdown content
-	return FormatContent(stdout.String()), nil
+	return formatContent(stdout.String(), separator), nil
 }
 
 // PrepareAttachmentFile downloads a file from the given URL and saves it to a temporary file
@@ -383,7 +383,7 @@ func DownloadFileToTemp(url, apiKey, fileName string) (string, error) {
 
 // PrepareAttachmentMarkdown downloads a file and converts it to Markdown text
 // Returns the Markdown content or an error if the operation fails
-func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string) (string, error) {
+func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string, separator string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
@@ -409,7 +409,7 @@ func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string) (string,
 
 	// Try Markitdown first if image is available
 	if dockerUtils.markitdownImage {
-		markdown, conversionErr = convert2MarkdownByMarkitdown(&tmpPath)
+		markdown, conversionErr = convert2MarkdownByMarkitdown(&tmpPath, separator)
 		if conversionErr == nil {
 			return markdown, nil
 		}
@@ -425,7 +425,16 @@ func PrepareAttachmentMarkdown(url, apiKey, fileName, mediaType string) (string,
 }
 
 // PrepareLocalFileMarkdown converts a local file to markdown format
-func PrepareLocalFileMarkdown(filePath string) (string, error) {
+func PrepareLocalFileMarkdown(filePath string, separator string) (string, error) {
+	// Try Markitdown first if image is available
+	if dockerUtils.markitdownImage {
+		markdown, err := convert2MarkdownByMarkitdown(&filePath, separator)
+		if err == nil {
+			return markdown, nil
+		}
+		log.Printf("markitdown conversion failed for file %s: %v", filePath, err)
+	}
+
 	// Fallback to Pandoc if Markitdown fails
 	if dockerUtils.pandocImage {
 		markdown, err := ConvertWithPandoc(filePath)
@@ -433,15 +442,6 @@ func PrepareLocalFileMarkdown(filePath string) (string, error) {
 			return markdown, nil
 		}
 		log.Printf("pandoc conversion failed for file %s: %v", filePath, err)
-	}
-
-	// Try Markitdown first if image is available
-	if dockerUtils.markitdownImage {
-		markdown, err := convert2MarkdownByMarkitdown(&filePath)
-		if err == nil {
-			return markdown, nil
-		}
-		log.Printf("markitdown conversion failed for file %s: %v", filePath, err)
 	}
 
 	// If all conversions failed, return error

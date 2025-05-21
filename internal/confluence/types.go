@@ -10,6 +10,8 @@ type Client struct {
 	client           *http.Client
 	allowedTypes     map[string]bool
 	unsupportedTypes map[string]bool
+	separator        string
+	parentMode       string
 }
 
 type AttachmentBasicInfo struct {

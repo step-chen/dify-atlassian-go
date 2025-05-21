@@ -128,7 +128,11 @@ func processOperation(filePath string, operation batchpool.Operation, dirKey str
 	}
 
 	// Convert content to markdown format
-	markdownContent, err := utils.PrepareLocalFileMarkdown(filePath)
+	separator := cfg.Dify.RagSetting.ProcessRule.Rules.Segmentation.Separator
+	if cfg.Dify.RagSetting.ProcessRule.Rules.ParentMode == "full-doc" {
+		separator = ""
+	}
+	markdownContent, err := utils.PrepareLocalFileMarkdown(filePath, separator)
 	if err != nil {
 		log.Printf("warning: failed to convert file %s to markdown: %v", filePath, err)
 		// Fallback to original content if conversion fails

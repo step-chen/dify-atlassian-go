@@ -88,7 +88,14 @@ func runProcessingLoop() {
 	}
 
 	// Init Confluence client
-	confluenceClient, err := confluence.NewClient(cfg.Confluence.BaseURL, cfg.Confluence.APIKey, cfg.AllowedTypes, cfg.UnsupportedTypes) // Use ConfluenceSettings
+	confluenceClient, err := confluence.NewClient(
+		cfg.Confluence.BaseURL,
+		cfg.Confluence.APIKey,
+		cfg.AllowedTypes,
+		cfg.UnsupportedTypes,
+		cfg.Dify.RagSetting.ProcessRule.Rules.Segmentation.Separator,
+		cfg.Dify.RagSetting.ProcessRule.Rules.ParentMode,
+	)
 	if err != nil {
 		log.Fatalf("failed to create Confluence client: %v", err)
 	}

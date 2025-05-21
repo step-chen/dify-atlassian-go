@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+__debug_bin*
 
 # Test binary, built with `go test -c`
 *.test
@@ -19,6 +20,8 @@ vendor/
 bin/
 pkg/
 cmd/dify-confluence/.markitdown
+venv/
+.venv/
 
 # IDE specific files
 .idea/

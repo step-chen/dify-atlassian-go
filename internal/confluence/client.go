@@ -10,7 +10,7 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
-func NewClient(baseURL, apiKey string, allowedTypes, unsupportedTypes map[string]bool) (*Client, error) {
+func NewClient(baseURL, apiKey string, allowedTypes, unsupportedTypes map[string]bool, separator, parentMode string) (*Client, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
@@ -24,11 +24,9 @@ func NewClient(baseURL, apiKey string, allowedTypes, unsupportedTypes map[string
 		client:           &http.Client{},
 		allowedTypes:     allowedTypes,
 		unsupportedTypes: unsupportedTypes,
+		separator:        separator,
+		parentMode:       parentMode,
 	}, nil
-}
-
-func (c *Client) DownloadAttachment(url string, fileName string, mediaType string) (content string, err error) {
-	return utils.PrepareAttachmentMarkdown(url, c.apiKey, fileName, mediaType)
 }
 
 func (c *Client) GetBaseURL() string {
@@ -175,7 +173,7 @@ func (c *Client) GetContent(contentID string, onlyTitle bool) (*Content, error) 
 			content.Content = ""
 			return content, nil
 		}
-		if md, err = utils.ConvertHTMLToMarkdown(rawContent.Body.View.Value); err != nil {
+		if md, err = utils.ConvertHTMLToMarkdown(rawContent.Body.View.Value, c.separator); err != nil {
 			md = utils.SanitizeHTML(rawContent.Body.View.Value)
 		}
 		if md != "" && md != "{}" {
@@ -229,7 +227,11 @@ func (c *Client) GetAttachment(attachmentID string, onlyTitle bool) (*Content, e
 		a.Xxh3 = utils.XXH3Hash(a.Content)
 	} else {
 		md := ""
-		if md, err = utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType); err != nil {
+		separator := c.separator
+		if c.parentMode == "full-doc" {
+			separator = ""
+		}
+		if md, err = utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType, separator); err != nil {
 			return nil, fmt.Errorf("failed to convert %s, %s with response: %v", a.Title, a.MediaType, err)
 		}
 		if md != "" && md != "{}" {
