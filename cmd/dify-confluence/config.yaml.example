@@ -62,19 +62,20 @@ dify:
           max_tokens: 500
           chunk_overlap: 150
 
-# Allowed media types for attachments (set to true to allow)
+# Allowed media types for attachments with supported conversion methods
+# 0: Common, 1: Native, 2: Markitdown, 3: Pandoc
 allowed_types:
-  text/plain: true
-  text/markdown: true
-  text/x-markdown: true
-  application/pdf: true
-  text/html: true
-  application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: true
-  application/vnd.ms-excel: true
-  application/vnd.openxmlformats-officedocument.wordprocessingml.document: true
-  text/csv: true
-  #application/vnd.oasis.opendocument.text: true
-  #application/vnd.oasis.opendocument.spreadsheet: true
+  text/plain: 0      # Supported by Common
+  text/markdown: 0   # Supported by Common
+  text/x-markdown: 0 # Supported by Common
+  text/html: 1       # Supported by Native
+  application/pdf: 2  # Supported by Markitdown
+  application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: 2  # xlsx - Markitdown
+  application/vnd.ms-excel: 2  # xls - Markitdown
+  application/vnd.openxmlformats-officedocument.wordprocessingml.document: 2  # docx - Markitdown
+  text/csv: 2        # Supported by Markitdown
+  #application/vnd.oasis.opendocument.text: 2  # odt - Markitdown
+  #application/vnd.oasis.opendocument.spreadsheet: 2  # ods - Markitdown
 
 # Unsupported media types that will be skipped during processing (set to true to skip)
 # Add or remove types as needed

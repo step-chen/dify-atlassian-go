@@ -54,21 +54,16 @@ dify:
           max_tokens: 1024
           chunk_overlap: 256
 
-# Allowed media types for attachments
+# Allowed media types for attachments with supported conversion methods
+# 0: Common, 1: Native, 2: Markitdown, 3: Pandoc
 allowed_types:
-  text/plain: true
-  text/markdown: true
-  text/x-markdown: true
-  application/pdf: true
-  text/html: true
-  application/vnd.openxmlformats-officedocument.wordprocessingml.document: true
-  application/vnd.ms-powerpoint: true
-  application/vnd.openxmlformats-officedocument.presentationml.presentation: true
-  application/vnd.ms-powerpoint.presentation: true
-  application/vnd.ms-powerpoint.slideshow: true
-  application/vnd.ms-powerpoint.template: true  #application/vnd.oasis.opendocument.text: true
-  #application/vnd.oasis.opendocument.spreadsheet: true
-
+  text/plain: 0      # Supported by Common
+  text/markdown: 0   # Supported by Common
+  text/x-markdown: 0 # Supported by Common
+  text/html: 1       # Supported by Native
+  application/pdf: 2  # Supported by Markitdown
+  application/vnd.openxmlformats-officedocument.wordprocessingml.document: 2  # docx - Markitdown
+  application/vnd.openxmlformats-officedocument.presentationml.presentation: 2  # pptx - Markitdown
 # Unsupported media types that will be skipped during processing
 unsupported_types:
   application/octet-stream: true
