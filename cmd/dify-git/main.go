@@ -69,7 +69,8 @@ func main() {
 				id,    // This should be the internal docID (repoKey:filePath)
 				title, // File path can serve as title
 				batch, // Dify batch ID
-				op,    // Operation details
+				"git",
+				op, // Operation details
 				cfg.Concurrency.IndexingTimeout,
 				cfg.Concurrency.DeleteTimeoutContent,
 			)

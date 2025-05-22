@@ -186,7 +186,7 @@ func deleteDocument(job *Job) error {
 	// Use the exported DeleteDocument method. Pass our unique docID as the 'confluenceIDToRemove'.
 	// This should trigger the internal performDeleteRequest when it's the last ID.
 	docID := generateDocID(job.RepoKey, job.FilePath)
-	err := job.Client.DeleteDocument(job.DocumentID, docID)
+	err := job.Client.DeleteDocument(job.DocumentID, "git", docID)
 	if err != nil {
 		// DeleteDocument handles logging internally, including 404s treated as success.
 		return fmt.Errorf("failed to delete document %s from Dify (via DeleteDocument): %w", job.DocumentID, err)

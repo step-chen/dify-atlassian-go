@@ -115,7 +115,7 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 	if content.Content == "" {
 		if operation.DifyID != "" {
 			// Attempt to delete the document if it exists
-			if err := client.DeleteDocument(operation.DifyID, contentID); err != nil {
+			if err := client.DeleteDocument(operation.DifyID, "confluence", contentID); err != nil {
 				log.Printf("failed to delete empty attachment %s: %v", contentID, err)
 			}
 		}
@@ -139,13 +139,13 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 
 		if !j.Client.IsEqualDifyMeta(j.Content.ID, params) {
 			// Update metadata using the new struct
-			if err := j.Client.UpdateDocumentMetadata(docID, params); err != nil {
+			if err := j.Client.UpdateDocumentMetadata(docID, "confluence", params); err != nil {
 				log.Printf("failed to update document metadata for %s: %v", docID, err)
 			}
 		}
 
 		if j.DocumentID != docID && j.DocumentID != "" {
-			j.Client.DeleteDocument(j.DocumentID, j.Content.ID)
+			j.Client.DeleteDocument(j.DocumentID, "confluence", j.Content.ID)
 		}
 		batchPool.MarkTaskComplete(j.SpaceKey)
 		return nil
@@ -190,9 +190,9 @@ func createDocument(j *Job) error {
 		When:              j.Content.PublishDate, // Renamed from Timestamp
 		Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
 	}
-	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, params); err != nil {
+	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, "confluence", params); err != nil {
 		// Pass Confluence ID (j.Content.ID) during cleanup deletion attempt
-		if errDel := j.Client.DeleteDocument(resp.Document.ID, j.Content.ID); errDel != nil {
+		if errDel := j.Client.DeleteDocument(resp.Document.ID, "confluence", j.Content.ID); errDel != nil {
 			log.Printf("failed to delete/update Dify document %s after metadata update failure: %v", resp.Document.ID, errDel)
 		}
 		return err
@@ -238,7 +238,7 @@ func updateDocument(j *Job) error {
 		When:              j.Content.PublishDate, // Renamed from Timestamp
 		Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
 	}
-	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, params); err != nil {
+	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, "confluence", params); err != nil {
 		return err
 	} // <--- Added missing closing brace
 
@@ -266,7 +266,7 @@ func deleteDocument(j *Job) error {
 	}
 
 	// Delete document or update metadata
-	err := j.Client.DeleteDocument(j.DocumentID, confluenceID)
+	err := j.Client.DeleteDocument(j.DocumentID, "confluence", confluenceID)
 	if err != nil {
 		log.Printf("failed to delete/update Dify document %s (for Confluence ID %s): %v", j.DocumentID, confluenceID, err)
 		// Still return the error if deletion/update failed

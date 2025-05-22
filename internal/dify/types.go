@@ -194,7 +194,7 @@ type DocumentListResponse struct {
 // It is used both for storing the metadata state and as parameters for updates.
 type DocumentMetadataRecord struct {
 	URL               string // Source URL (Confluence page/attachment or Bitbucket file)
-	SourceType        string // "confluence" or "git"
+	SourceType        string // "confluence", "file" or "git"
 	Type              string // Content type ("page", "attachment", or "file")
 	SpaceKey          string // Confluence space key (for Confluence documents)
 	RepositorySlug    string // Bitbucket repository slug (for Bitbucket documents)

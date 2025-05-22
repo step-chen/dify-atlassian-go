@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+
+	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
 // LogConfig defines logging configuration
@@ -16,11 +18,11 @@ type LogConfig struct {
 }
 
 type Config struct {
-	Concurrency      ConcCfg         `yaml:"concurrency"`       // Concurrency settings
-	Dify             DifyCfg         `yaml:"dify"`              // Dify API configuration
-	AllowedTypes     map[string]bool `yaml:"allowed_types"`     // Allowed media types for attachments
-	UnsupportedTypes map[string]bool `yaml:"unsupported_types"` // Unsupported media types
-	Log              LogConfig       `yaml:"log"`               // Logging configuration
+	Concurrency      ConcCfg                           `yaml:"concurrency"`       // Concurrency settings
+	Dify             DifyCfg                           `yaml:"dify"`              // Dify API configuration
+	AllowedTypes     map[string]utils.ConversionMethod `yaml:"allowed_types"`     // Allowed media types and their conversion methods
+	UnsupportedTypes map[string]bool                   `yaml:"unsupported_types"` // Unsupported media types
+	Log              LogConfig                         `yaml:"log"`               // Logging configuration
 }
 
 // GetDifyConfig returns the Dify configuration part.

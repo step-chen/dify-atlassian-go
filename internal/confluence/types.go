@@ -2,13 +2,15 @@ package confluence
 
 import (
 	"net/http"
+
+	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
 type Client struct {
 	baseURL          string
 	apiKey           string
 	client           *http.Client
-	allowedTypes     map[string]bool
+	allowedTypes     map[string]utils.ConversionMethod
 	unsupportedTypes map[string]bool
 	separator        string
 	parentMode       string

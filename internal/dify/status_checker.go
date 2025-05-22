@@ -11,7 +11,7 @@ import (
 
 // CheckBatchStatus checks the batch status using Dify client
 // This is a method on Client since it uses client-specific operations
-func (c *Client) CheckBatchStatus(ctx context.Context, key, id, title, batch string, op batchpool.Operation, indexingTimeout int, deleteTimeoutContent bool) (string, error) {
+func (c *Client) CheckBatchStatus(ctx context.Context, key, id, title, batch, source string, op batchpool.Operation, indexingTimeout int, deleteTimeoutContent bool) (string, error) {
 	// Check for context cancellation first (from BatchPool's task timeout or global shutdown)
 	select {
 	case <-ctx.Done():
@@ -41,7 +41,7 @@ func (c *Client) CheckBatchStatus(ctx context.Context, key, id, title, batch str
 			if deleteTimeoutContent {
 				// Delete the document or update metadata if configured to do so
 				// Pass the confluenceID which is a parameter of statusChecker
-				err := c.DeleteDocument(status.Data[0].ID, id)
+				err := c.DeleteDocument(status.Data[0].ID, source, id)
 				if err != nil {
 					// Error message updated to reflect potential metadata update failure too
 					return "", fmt.Errorf("failed to delete/update timeout document %s for %s content %s: %w", status.Data[0].ID, key, title, err)

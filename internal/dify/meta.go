@@ -227,7 +227,7 @@ func (c *Client) updateDocumentMetadataByRequest(request UpdateDocumentMetadataR
 }
 
 // UpdateDocumentMetadata updates document metadata in Dify API and internal cache
-func (c *Client) UpdateDocumentMetadata(documentID string, params DocumentMetadataRecord) error {
+func (c *Client) UpdateDocumentMetadata(documentID, source string, params DocumentMetadataRecord) error {
 	if record, exists := c.GetDocumentMetadataRecord(documentID); exists {
 		if record.When != "" && utils.BeforeRFC3339Times(params.When, record.When) {
 			params.When = record.When // Use existing value if the new one is older
@@ -237,7 +237,7 @@ func (c *Client) UpdateDocumentMetadata(documentID string, params DocumentMetada
 	finalConfluenceIDsValue := c.calculateFinalConfluenceIDs(documentID, params.ConfluenceIDToAdd)
 
 	// 2. Prepare metadata for API call using the fields from the params struct
-	metadataToUpdate := c.buildApiMetadataPayload(params, finalConfluenceIDsValue)
+	metadataToUpdate := c.buildApiMetadataPayload(params, finalConfluenceIDsValue, source)
 
 	// 3. Perform the API call if there's anything to update
 	var apiErr error
@@ -270,7 +270,7 @@ func (c *Client) UpdateDocumentMetadata(documentID string, params DocumentMetada
 	if params.URL != "" {
 		recordToStore.URL = params.URL
 	}
-	recordToStore.SourceType = "confluence" // Always set source type in internal cache
+	recordToStore.SourceType = source // Always set source type in internal cache
 	if params.Type != "" {
 		recordToStore.Type = params.Type
 	}
@@ -309,12 +309,12 @@ func (c *Client) UpdateDocumentMetadata(documentID string, params DocumentMetada
 }
 
 // buildApiMetadataPayload prepares metadata for API requests
-func (c *Client) buildApiMetadataPayload(params DocumentMetadataRecord, finalConfluenceIDsValue string) []DocumentMetadata {
+func (c *Client) buildApiMetadataPayload(params DocumentMetadataRecord, finalConfluenceIDsValue, source string) []DocumentMetadata {
 	metadataToUpdate := []DocumentMetadata{}
 
 	// Use fields directly from the params (DocumentMetadataRecord) struct
 	c.addMetadataIfValid(&metadataToUpdate, "url", params.URL)
-	c.addMetadataIfValid(&metadataToUpdate, "source_type", "confluence") // Always set source_type for API
+	c.addMetadataIfValid(&metadataToUpdate, "source_type", source) // Always set source_type for API
 	c.addMetadataIfValid(&metadataToUpdate, "type", params.Type)
 	c.addMetadataIfValid(&metadataToUpdate, "space_key", params.SpaceKey)
 	c.addMetadataIfValid(&metadataToUpdate, "last_modified_date", params.When) // Use params.When

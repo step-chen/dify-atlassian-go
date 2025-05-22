@@ -382,7 +382,7 @@ func (c *Client) DeleteMetaMapping(documentID string) {
 // DeleteDocument handles the removal of a Confluence ID association from a Dify document.
 // If the removed ID is the last one associated with the Dify document, the document itself is deleted.
 // Otherwise, the document's metadata is updated to remove the specified Confluence ID.
-func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
+func (c *Client) DeleteDocument(documentID, source, confluenceIDToRemove string) error {
 	record, exists := c.GetDocumentMetadataRecord(documentID)
 	if !exists {
 		// If the record doesn't exist locally, it might still exist in Dify.
@@ -413,7 +413,7 @@ func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
 	// Decide whether to update metadata or delete the document
 	if len(remainingIDs) > 0 {
 		// Update metadata if other IDs remain
-		return c.updateDocumentConfluenceIDs(documentID, record, remainingIDs)
+		return c.updateDocumentConfluenceIDs(documentID, source, record, remainingIDs)
 	} else {
 		// Delete the document if this was the last ID
 		return c.performDeleteRequest(documentID)
@@ -421,7 +421,7 @@ func (c *Client) DeleteDocument(documentID, confluenceIDToRemove string) error {
 }
 
 // updateDocumentConfluenceIDs updates the 'id' metadata field for a Dify document.
-func (c *Client) updateDocumentConfluenceIDs(documentID string, originalRecord DocumentMetadataRecord, remainingIDs []string) error {
+func (c *Client) updateDocumentConfluenceIDs(documentID, source string, originalRecord DocumentMetadataRecord, remainingIDs []string) error {
 	newIDsStr := strings.Join(remainingIDs, ",")
 
 	metaIDFieldID := c.GetMetaID("id")
@@ -457,7 +457,7 @@ func (c *Client) updateDocumentConfluenceIDs(documentID string, originalRecord D
 
 	// Include other relevant metadata fields from the original record
 	addMeta("url", originalRecord.URL)
-	addMeta("source_type", "confluence") // Assuming it's always confluence here
+	addMeta("source_type", source) // Assuming it's always confluence here
 	addMeta("type", originalRecord.Type)
 	addMeta("space_key", originalRecord.SpaceKey)
 	addMeta("last_modified_date", originalRecord.When)

@@ -48,6 +48,7 @@ func main() {
 				id,
 				title,
 				batch,
+				"confluence",
 				op,
 				cfg.Concurrency.IndexingTimeout,
 				cfg.Concurrency.DeleteTimeoutContent,

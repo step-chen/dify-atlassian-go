@@ -10,7 +10,7 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
-func NewClient(baseURL, apiKey string, allowedTypes, unsupportedTypes map[string]bool, separator, parentMode string) (*Client, error) {
+func NewClient(baseURL, apiKey string, allowedTypes map[string]utils.ConversionMethod, unsupportedTypes map[string]bool, separator, parentMode string) (*Client, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("baseURL is required")
 	}
@@ -173,7 +173,7 @@ func (c *Client) GetContent(contentID string, onlyTitle bool) (*Content, error) 
 			content.Content = ""
 			return content, nil
 		}
-		if md, err = utils.ConvertHTMLToMarkdown(rawContent.Body.View.Value, c.separator); err != nil {
+		if md, err = utils.ConvertContent2Markdown(rawContent.Body.View.Value, content.MediaType, c.separator, c.allowedTypes[content.MediaType]); err != nil {
 			md = utils.SanitizeHTML(rawContent.Body.View.Value)
 		}
 		if md != "" && md != "{}" {
@@ -231,7 +231,13 @@ func (c *Client) GetAttachment(attachmentID string, onlyTitle bool) (*Content, e
 		if c.parentMode == "full-doc" {
 			separator = ""
 		}
-		if md, err = utils.PrepareAttachmentMarkdown(a.URL, c.apiKey, a.Title, a.MediaType, separator); err != nil {
+		tmpPath, err := utils.DownloadFileToTemp(url, c.apiKey, a.Title)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download file: %w", err)
+		}
+		defer utils.RemoveFile(tmpPath)
+
+		if md, err = utils.ConvertFile2Markdown(tmpPath, a.MediaType, separator, c.allowedTypes[a.MediaType]); err != nil {
 			return nil, fmt.Errorf("failed to convert %s, %s with response: %v", a.Title, a.MediaType, err)
 		}
 		if md != "" && md != "{}" {

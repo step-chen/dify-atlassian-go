@@ -57,7 +57,10 @@ func getDirectoryFiles(dirPath string) (map[string]batchpool.Operation, error) {
 
 		// Check file type using MIMEType
 		mimeType := utils.GetMIMEType(path)
-		if cfg.AllowedTypes != nil && !cfg.AllowedTypes[mimeType] {
+		if cfg.AllowedTypes == nil {
+			return nil
+		}
+		if _, exists := cfg.AllowedTypes[mimeType]; !exists {
 			return nil // Skip unsupported types
 		}
 		if cfg.UnsupportedTypes != nil && cfg.UnsupportedTypes[mimeType] {
@@ -70,6 +73,7 @@ func getDirectoryFiles(dirPath string) (map[string]batchpool.Operation, error) {
 		files[path] = batchpool.Operation{
 			Action:           0, // Create by default
 			LastModifiedDate: modTime,
+			MediaType:        mimeType,
 		}
 
 		return nil
@@ -132,7 +136,8 @@ func processOperation(filePath string, operation batchpool.Operation, dirKey str
 	if cfg.Dify.RagSetting.ProcessRule.Rules.ParentMode == "full-doc" {
 		separator = ""
 	}
-	markdownContent, err := utils.PrepareLocalFileMarkdown(filePath, separator)
+
+	markdownContent, err := utils.ConvertFile2Markdown(filePath, operation.MediaType, separator, cfg.AllowedTypes[operation.MediaType])
 	if err != nil {
 		log.Printf("warning: failed to convert file %s to markdown: %v", filePath, err)
 		// Fallback to original content if conversion fails
@@ -185,9 +190,9 @@ func createDocument(j *Job) error {
 		When:       time.Now().Format(time.RFC3339),
 		Xxh3:       j.Client.GetHashByDifyIDFromRecord(resp.Document.ID),
 	}
-	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, params); err != nil {
+	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, "file", params); err != nil {
 		// Pass file path during cleanup deletion attempt
-		if errDel := j.Client.DeleteDocument(resp.Document.ID, j.FilePath); errDel != nil {
+		if errDel := j.Client.DeleteDocument(resp.Document.ID, "file", j.FilePath); errDel != nil {
 			log.Printf("failed to delete/update Dify document %s after metadata update failure: %v", resp.Document.ID, errDel)
 		}
 		return err
@@ -231,7 +236,7 @@ func updateDocument(j *Job) error {
 		When:       time.Now().Format(time.RFC3339),
 		Xxh3:       j.Client.GetHashByDifyIDFromRecord(j.DocumentID),
 	}
-	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, params); err != nil {
+	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, "file", params); err != nil {
 		return err
 	}
 
@@ -259,7 +264,7 @@ func deleteDocument(j *Job) error {
 	}
 
 	// Delete document or update metadata
-	err := j.Client.DeleteDocument(j.DocumentID, filePath)
+	err := j.Client.DeleteDocument(j.DocumentID, "file", filePath)
 	if err != nil {
 		log.Printf("failed to delete/update Dify document %s (for file path %s): %v", j.DocumentID, filePath, err)
 		// Still return the error if deletion/update failed

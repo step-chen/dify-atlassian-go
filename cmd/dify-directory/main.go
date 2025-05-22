@@ -45,6 +45,7 @@ func main() {
 				id,
 				title,
 				batch,
+				"file",
 				op,
 				cfg.Concurrency.IndexingTimeout,
 				cfg.Concurrency.DeleteTimeoutContent,
