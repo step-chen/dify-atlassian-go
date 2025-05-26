@@ -71,6 +71,13 @@ func formatContent(s string, separator string) string {
 	return trimString(s)
 }
 
+func RemoveRootDir(root, path string) string {
+	dir := strings.TrimPrefix(path, root)
+	dir = strings.TrimPrefix(dir, "\\")
+	dir = strings.TrimPrefix(dir, "/")
+	return dir
+}
+
 func RemoveFile(inputPath string) {
 	fileInfo, err := os.Stat(inputPath)
 	if err != nil {

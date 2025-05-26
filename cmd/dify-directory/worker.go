@@ -10,13 +10,14 @@ import (
 
 // Job represents a directory file processing job
 type Job struct {
-	Type       batchpool.ContentType // Type of job
-	DocumentID string                // Document ID
-	FilePath   string                // File path
-	Content    string                // File content
-	Client     *dify.Client          // Dify client
-	Op         batchpool.Operation
-	DirKey     string // Directory key (dir1, dir2)
+	Type         batchpool.ContentType // Type of job
+	DocumentID   string                // Document ID
+	RootDir      string
+	RelativePath string       // File path
+	Content      string       // File content
+	Client       *dify.Client // Dify client
+	Op           batchpool.Operation
+	DirKey       string // Directory key (dir1, dir2)
 }
 
 type JobChannels struct {
@@ -28,7 +29,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 	for job := range jobChan {
 		// batchPool.WaitForAvailable() // Removed - BatchPool manages worker availability internally
 		switch job.Type {
-		case batchpool.Page, batchpool.Attachment:
+		case batchpool.LocalFile:
 			switch job.Op.Action {
 			case 0: // Create
 				if err := createDocument(&job); err != nil {
@@ -36,7 +37,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 				}
 			case 1: // Update (or Create if ID missing - though initOperations should handle this)
 				if job.DocumentID == "" {
-					log.Printf("Warning: Update action requested but no DocumentID found for file %s. Attempting create.", job.FilePath)
+					log.Printf("Warning: Update action requested but no DocumentID found for file %s. Attempting create.", job.RelativePath)
 					if err := createDocument(&job); err != nil {
 						log.Printf("error processing create-during-update content job: %v", err)
 					}
@@ -47,7 +48,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 				}
 			case 2: // Delete
 				if job.DocumentID == "" {
-					log.Printf("Warning: Delete action requested but no DocumentID found for file %s. Skipping deletion.", job.FilePath)
+					log.Printf("Warning: Delete action requested but no DocumentID found for file %s. Skipping deletion.", job.RelativePath)
 				} else {
 					if err := deleteDocument(&job); err != nil {
 						log.Printf("error processing delete content job: %v", err)

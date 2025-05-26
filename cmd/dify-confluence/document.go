@@ -127,14 +127,14 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 	docID := client.GetDifyIDByHash(j.Content.Xxh3)
 	if docID != "" {
 		params := dify.DocumentMetadataRecord{
-			URL:               j.Content.URL,
-			SourceType:        "confluence", // Added SourceType
-			Type:              j.Content.Type,
-			SpaceKey:          j.SpaceKey,
-			ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
-			When:              j.Content.PublishDate, // Renamed from Timestamp
-			Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
-			DifyID:            docID,                 // Added DifyID
+			URL:        j.Content.URL,
+			SourceType: "confluence", // Added SourceType
+			Type:       j.Content.Type,
+			SpaceKey:   j.SpaceKey,
+			IDToAdd:    j.Content.ID,          // Use the transient field to add this ID
+			When:       j.Content.PublishDate, // Renamed from Timestamp
+			Xxh3:       j.Content.Xxh3,        // Renamed from XXH3
+			DifyID:     docID,                 // Added DifyID
 		}
 
 		if !j.Client.IsEqualDifyMeta(j.Content.ID, params) {
@@ -182,13 +182,13 @@ func createDocument(j *Job) error {
 
 	// Update document metadata using the new struct
 	params := dify.DocumentMetadataRecord{
-		URL:               j.Content.URL,
-		SourceType:        "confluence", // Added SourceType
-		Type:              j.Content.Type,
-		SpaceKey:          j.SpaceKey,
-		ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
-		When:              j.Content.PublishDate, // Renamed from Timestamp
-		Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
+		URL:        j.Content.URL,
+		SourceType: "confluence", // Added SourceType
+		Type:       j.Content.Type,
+		SpaceKey:   j.SpaceKey,
+		IDToAdd:    j.Content.ID,          // Use the transient field to add this ID
+		When:       j.Content.PublishDate, // Renamed from Timestamp
+		Xxh3:       j.Content.Xxh3,        // Renamed from XXH3
 	}
 	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, "confluence", params); err != nil {
 		// Pass Confluence ID (j.Content.ID) during cleanup deletion attempt
@@ -230,13 +230,13 @@ func updateDocument(j *Job) error {
 
 	// Update document metadata using the new struct
 	params := dify.DocumentMetadataRecord{
-		URL:               j.Content.URL,
-		SourceType:        "confluence", // Added SourceType
-		Type:              j.Content.Type,
-		SpaceKey:          j.SpaceKey,
-		ConfluenceIDToAdd: j.Content.ID,          // Use the transient field to add this ID
-		When:              j.Content.PublishDate, // Renamed from Timestamp
-		Xxh3:              j.Content.Xxh3,        // Renamed from XXH3
+		URL:        j.Content.URL,
+		SourceType: "confluence", // Added SourceType
+		Type:       j.Content.Type,
+		SpaceKey:   j.SpaceKey,
+		IDToAdd:    j.Content.ID,          // Use the transient field to add this ID
+		When:       j.Content.PublishDate, // Renamed from Timestamp
+		Xxh3:       j.Content.Xxh3,        // Renamed from XXH3
 	}
 	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, "confluence", params); err != nil {
 		return err

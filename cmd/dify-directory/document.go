@@ -30,7 +30,7 @@ func processDirectory(dirKey, dirPath string, client *dify.Client, jobChan *JobC
 
 	// Process each file operation
 	for filePath, operation := range files {
-		if err := processOperation(filePath, operation, dirKey, client, jobChan); err != nil {
+		if err := processOperation(dirPath, filePath, operation, dirKey, client, jobChan); err != nil {
 			log.Printf("error processing directory %s file %s: %v", dirPath, filePath, err)
 		}
 	}
@@ -70,7 +70,9 @@ func getDirectoryFiles(dirPath string) (map[string]batchpool.Operation, error) {
 		// Get file modification time
 		modTime := info.ModTime().Format(time.RFC3339)
 
-		files[path] = batchpool.Operation{
+		fp := utils.RemoveRootDir(dirPath, path)
+		files[fp] = batchpool.Operation{
+			Type:             batchpool.LocalFile,
 			Action:           0, // Create by default
 			LastModifiedDate: modTime,
 			MediaType:        mimeType,
@@ -124,11 +126,12 @@ func initOperations(client *dify.Client, files map[string]batchpool.Operation) e
 }
 
 // processOperation handles individual file operations
-func processOperation(filePath string, operation batchpool.Operation, dirKey string, client *dify.Client, jobChan *JobChannels) error {
+func processOperation(rootDir, relativePath string, operation batchpool.Operation, dirKey string, client *dify.Client, jobChan *JobChannels) error {
 	// Read file content
-	content, err := os.ReadFile(filePath)
+	fp := filepath.Join(rootDir, relativePath)
+	content, err := os.ReadFile(fp)
 	if err != nil {
-		return fmt.Errorf("failed to read file %s: %w", filePath, err)
+		return fmt.Errorf("failed to read file %s: %w", fp, err)
 	}
 
 	// Convert content to markdown format
@@ -137,21 +140,22 @@ func processOperation(filePath string, operation batchpool.Operation, dirKey str
 		separator = ""
 	}
 
-	markdownContent, err := utils.ConvertFile2Markdown(filePath, operation.MediaType, separator, cfg.AllowedTypes[operation.MediaType])
+	markdownContent, err := utils.ConvertFile2Markdown(fp, operation.MediaType, separator, cfg.AllowedTypes[operation.MediaType])
 	if err != nil {
-		log.Printf("warning: failed to convert file %s to markdown: %v", filePath, err)
+		log.Printf("warning: failed to convert file %s to markdown: %v", fp, err)
 		// Fallback to original content if conversion fails
 		markdownContent = string(content)
 	}
 
 	j := Job{
-		Type:       operation.Type,
-		DocumentID: operation.DifyID,
-		FilePath:   filePath,
-		Content:    markdownContent,
-		Client:     client,
-		Op:         operation,
-		DirKey:     dirKey,
+		Type:         operation.Type,
+		DocumentID:   operation.DifyID,
+		RootDir:      rootDir,
+		RelativePath: relativePath,
+		Content:      markdownContent,
+		Client:       client,
+		Op:           operation,
+		DirKey:       dirKey,
 	}
 
 	jobChan.Jobs <- j
@@ -164,7 +168,7 @@ func createDocument(j *Job) error {
 
 	// Create new document
 	docRequest := dify.CreateDocumentRequest{
-		Name:              filepath.Base(j.FilePath),
+		Name:              filepath.Base(j.RelativePath),
 		Text:              string(j.Content),
 		IndexingTechnique: cfg.Dify.RagSetting.IndexingTechnique,
 		DocForm:           cfg.Dify.RagSetting.DocForm,
@@ -173,7 +177,7 @@ func createDocument(j *Job) error {
 	resp, err := j.Client.CreateDocumentByText(&docRequest)
 
 	if err != nil {
-		log.Printf("failed to create Dify document for directory %s file %s: %v", j.DirKey, j.FilePath, err)
+		log.Printf("failed to create Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
 		return err
 	}
 
@@ -184,25 +188,27 @@ func createDocument(j *Job) error {
 
 	// Update document metadata using the new struct
 	params := dify.DocumentMetadataRecord{
-		URL:        j.FilePath,
+		IDToAdd:    j.RelativePath,
+		URL:        j.RelativePath,
 		SourceType: "directory",
 		Type:       "file",
-		When:       time.Now().Format(time.RFC3339),
-		Xxh3:       j.Client.GetHashByDifyIDFromRecord(resp.Document.ID),
+		When:       j.Op.LastModifiedDate,
+		//When:       time.Now().Format(time.RFC3339),
+		Xxh3: j.Client.GetHashByDifyIDFromRecord(resp.Document.ID),
 	}
 	if err := j.Client.UpdateDocumentMetadata(resp.Document.ID, "file", params); err != nil {
 		// Pass file path during cleanup deletion attempt
-		if errDel := j.Client.DeleteDocument(resp.Document.ID, "file", j.FilePath); errDel != nil {
+		if errDel := j.Client.DeleteDocument(resp.Document.ID, "file", j.RelativePath); errDel != nil {
 			log.Printf("failed to delete/update Dify document %s after metadata update failure: %v", resp.Document.ID, errDel)
 		}
 		return err
 	}
 
 	// Add document to batch pool for indexing tracking
-	err = batchPool.Add(context.Background(), j.DirKey, j.FilePath, docRequest.Name, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, docRequest.Name, resp.Batch, j.Op)
 	if err != nil {
 		// Log error if adding to the pool fails (e.g., pool shutdown)
-		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.FilePath, err)
+		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
 		// Consider how to handle this - should the document be deleted? For now, just log.
 	}
 
@@ -215,14 +221,14 @@ func updateDocument(j *Job) error {
 
 	// Update document
 	updateRequest := dify.UpdateDocumentRequest{
-		Name: filepath.Base(j.FilePath),
+		Name: filepath.Base(j.RelativePath),
 		Text: string(j.Content),
 	}
 
 	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest)
 
 	if err != nil {
-		log.Printf("failed to update Dify document for directory %s file %s: %v", j.DirKey, j.FilePath, err)
+		log.Printf("failed to update Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
 		return err
 	}
 
@@ -230,7 +236,7 @@ func updateDocument(j *Job) error {
 
 	// Update document metadata using the new struct
 	params := dify.DocumentMetadataRecord{
-		URL:        j.FilePath,
+		URL:        j.RelativePath,
 		SourceType: "directory",
 		Type:       "file",
 		When:       time.Now().Format(time.RFC3339),
@@ -241,9 +247,9 @@ func updateDocument(j *Job) error {
 	}
 
 	// Add document to batch pool for indexing tracking
-	err = batchPool.Add(context.Background(), j.DirKey, j.FilePath, updateRequest.Name, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, updateRequest.Name, resp.Batch, j.Op)
 	if err != nil {
-		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.FilePath, err)
+		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
 	}
 
 	return nil // Return nil even if adding to pool failed, as document update succeeded
@@ -252,9 +258,9 @@ func updateDocument(j *Job) error {
 // deleteDocument deletes a document from Dify
 func deleteDocument(j *Job) error {
 	// Determine the file path based on the job type
-	var filePath string
+	var relativePath string
 	if j.Content != "" {
-		filePath = j.FilePath
+		relativePath = j.RelativePath
 	} else {
 		// Should not happen if job is constructed correctly
 		log.Printf("Error: Could not determine file path for delete job with Dify ID %s", j.DocumentID)
@@ -264,9 +270,9 @@ func deleteDocument(j *Job) error {
 	}
 
 	// Delete document or update metadata
-	err := j.Client.DeleteDocument(j.DocumentID, "file", filePath)
+	err := j.Client.DeleteDocument(j.DocumentID, "file", relativePath)
 	if err != nil {
-		log.Printf("failed to delete/update Dify document %s (for file path %s): %v", j.DocumentID, filePath, err)
+		log.Printf("failed to delete/update Dify document %s (for file path %s): %v", j.DocumentID, relativePath, err)
 		// Still return the error if deletion/update failed
 		return err
 	}

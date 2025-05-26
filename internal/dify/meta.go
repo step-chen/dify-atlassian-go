@@ -234,7 +234,7 @@ func (c *Client) UpdateDocumentMetadata(documentID, source string, params Docume
 		}
 	}
 	// 1. Calculate final Confluence IDs based on params.ConfluenceIDToAdd and existing internal state
-	finalConfluenceIDsValue := c.calculateFinalConfluenceIDs(documentID, params.ConfluenceIDToAdd)
+	finalConfluenceIDsValue := c.calculateFinalConfluenceIDs(documentID, params.IDToAdd)
 
 	// 2. Prepare metadata for API call using the fields from the params struct
 	metadataToUpdate := c.buildApiMetadataPayload(params, finalConfluenceIDsValue, source)
@@ -278,7 +278,7 @@ func (c *Client) UpdateDocumentMetadata(documentID, source string, params Docume
 		recordToStore.SpaceKey = params.SpaceKey
 	}
 	// Use the calculated final value for ConfluenceIDs in internal storage
-	recordToStore.ConfluenceIDs = finalConfluenceIDsValue
+	recordToStore.IDs = finalConfluenceIDsValue
 	if params.When != "" { // Use params.When (matches struct field name)
 		recordToStore.When = params.When
 	}
@@ -350,8 +350,8 @@ func (c *Client) calculateFinalConfluenceIDs(documentID, newConfluenceID string)
 	existingIDsSet := make(map[string]struct{}) // Use a set for easier management
 
 	// Populate the set with existing IDs from the cache
-	if recordExists && currentRecord.ConfluenceIDs != "" {
-		for _, id := range strings.Split(currentRecord.ConfluenceIDs, ",") {
+	if recordExists && currentRecord.IDs != "" {
+		for _, id := range strings.Split(currentRecord.IDs, ",") {
 			trimmedID := strings.TrimSpace(id)
 			if trimmedID != "" {
 				existingIDsSet[trimmedID] = struct{}{}

@@ -49,7 +49,7 @@ func (c *Client) GetDocumentMetadataRecord(difyID string) (DocumentMetadataRecor
 	return record, exists
 }
 
-func (c *Client) IsEqualDifyMeta(confluenceID string, meta DocumentMetadataRecord) bool {
+func (c *Client) IsEqualDifyMeta(ID string, meta DocumentMetadataRecord) bool {
 	record, exists := c.GetDocumentMetadataRecord(meta.DifyID)
 	if !exists {
 		return false
@@ -62,9 +62,9 @@ func (c *Client) IsEqualDifyMeta(confluenceID string, meta DocumentMetadataRecor
 	}
 
 	// Check if the confluenceID exists in the record's ConfluenceIDs
-	ids := strings.Split(record.ConfluenceIDs, ",")
+	ids := strings.Split(record.IDs, ",")
 	for _, id := range ids {
-		if strings.TrimSpace(id) == confluenceID {
+		if strings.TrimSpace(id) == ID {
 			return true
 		}
 	}
@@ -175,7 +175,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	confluenceIDToDifyRecord := make(map[string]DocumentMetadataRecord)
+	IDToDifyRecord := make(map[string]DocumentMetadataRecord)
 
 	if page < 0 {
 		page = 0
@@ -214,10 +214,10 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 		}
 
 		for _, doc := range response.Data {
-			var confluenceIDs, whenVal, xxh3Val, source_type, space_key, doc_type, url string
+			var IDs, whenVal, xxh3Val, source_type, space_key, doc_type, url string
 			for _, meta := range doc.DocMetadata {
 				if meta.Name == "id" {
-					confluenceIDs = meta.Value
+					IDs = meta.Value
 				} else if meta.Name == "last_modified_date" {
 					whenVal = meta.Value
 				} else if meta.Name == "xxh3" {
@@ -233,16 +233,16 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 				}
 			}
 
-			if confluenceIDs != "" {
+			if IDs != "" {
 				record := DocumentMetadataRecord{
-					DifyID:        doc.ID,
-					ConfluenceIDs: confluenceIDs,
-					When:          whenVal,
-					Xxh3:          xxh3Val,
-					SourceType:    source_type,
-					SpaceKey:      space_key,
-					Type:          doc_type,
-					URL:           url,
+					DifyID:     doc.ID,
+					IDs:        IDs,
+					When:       whenVal,
+					Xxh3:       xxh3Val,
+					SourceType: source_type,
+					SpaceKey:   space_key,
+					Type:       doc_type,
+					URL:        url,
 				}
 				c.SetHashMapping(xxh3Val, doc.ID)
 
@@ -250,11 +250,11 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 				c.SetDocumentMetadataRecord(doc.ID, record)
 
 				// Populate the return map (Confluence ID -> Record)
-				ids := strings.Split(confluenceIDs, ",")
+				ids := strings.Split(IDs, ",")
 				for _, id := range ids {
 					trimmedID := strings.TrimSpace(id)
 					if trimmedID != "" {
-						confluenceIDToDifyRecord[trimmedID] = record
+						IDToDifyRecord[trimmedID] = record
 					}
 				}
 			}
@@ -267,7 +267,7 @@ func (c *Client) FetchDocumentsList(page, limit int) (map[string]DocumentMetadat
 		page++
 	}
 
-	return confluenceIDToDifyRecord, nil
+	return IDToDifyRecord, nil
 }
 
 func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
@@ -382,22 +382,22 @@ func (c *Client) DeleteMetaMapping(documentID string) {
 // DeleteDocument handles the removal of a Confluence ID association from a Dify document.
 // If the removed ID is the last one associated with the Dify document, the document itself is deleted.
 // Otherwise, the document's metadata is updated to remove the specified Confluence ID.
-func (c *Client) DeleteDocument(documentID, source, confluenceIDToRemove string) error {
+func (c *Client) DeleteDocument(documentID, source, IDToRemove string) error {
 	record, exists := c.GetDocumentMetadataRecord(documentID)
 	if !exists {
 		// If the record doesn't exist locally, it might still exist in Dify.
 		// Log a warning and attempt direct deletion, assuming this might be the only ID.
-		log.Printf("Warning: No local metadata record found for Dify document %s during deletion attempt for Confluence ID %s. Attempting direct deletion.", documentID, confluenceIDToRemove)
+		log.Printf("Warning: No local metadata record found for Dify document %s during deletion attempt for Confluence ID %s. Attempting direct deletion.", documentID, IDToRemove)
 		return c.performDeleteRequest(documentID)
 	}
 
 	// Filter out the confluenceIDToRemove
-	existingIDs := strings.Split(record.ConfluenceIDs, ",")
+	existingIDs := strings.Split(record.IDs, ",")
 	remainingIDs := make([]string, 0, len(existingIDs))
 	found := false
 	for _, id := range existingIDs {
 		trimmedID := strings.TrimSpace(id)
-		if trimmedID == confluenceIDToRemove {
+		if trimmedID == IDToRemove {
 			found = true
 		} else if trimmedID != "" {
 			remainingIDs = append(remainingIDs, trimmedID)
@@ -407,13 +407,13 @@ func (c *Client) DeleteDocument(documentID, source, confluenceIDToRemove string)
 	// If the ID to remove wasn't found in the record, log a warning but proceed.
 	// It's possible the local cache is stale. The update/delete operation will handle it.
 	if !found {
-		log.Printf("Warning: Confluence ID %s not found in local metadata record for Dify document %s (%s). Proceeding with operation.", confluenceIDToRemove, documentID, record.ConfluenceIDs)
+		log.Printf("Warning: Confluence ID %s not found in local metadata record for Dify document %s (%s). Proceeding with operation.", IDToRemove, documentID, record.IDs)
 	}
 
 	// Decide whether to update metadata or delete the document
 	if len(remainingIDs) > 0 {
 		// Update metadata if other IDs remain
-		return c.updateDocumentConfluenceIDs(documentID, source, record, remainingIDs)
+		return c.updateDocumentIDs(documentID, source, record, remainingIDs)
 	} else {
 		// Delete the document if this was the last ID
 		return c.performDeleteRequest(documentID)
@@ -421,7 +421,7 @@ func (c *Client) DeleteDocument(documentID, source, confluenceIDToRemove string)
 }
 
 // updateDocumentConfluenceIDs updates the 'id' metadata field for a Dify document.
-func (c *Client) updateDocumentConfluenceIDs(documentID, source string, originalRecord DocumentMetadataRecord, remainingIDs []string) error {
+func (c *Client) updateDocumentIDs(documentID, source string, originalRecord DocumentMetadataRecord, remainingIDs []string) error {
 	newIDsStr := strings.Join(remainingIDs, ",")
 
 	metaIDFieldID := c.GetMetaID("id")
@@ -482,7 +482,7 @@ func (c *Client) updateDocumentConfluenceIDs(documentID, source string, original
 
 	// Update local cache only on successful API call
 	updatedRecord := originalRecord
-	updatedRecord.ConfluenceIDs = newIDsStr
+	updatedRecord.IDs = newIDsStr
 	c.SetDocumentMetadataRecord(documentID, updatedRecord)
 
 	return nil
@@ -756,11 +756,11 @@ func (c *Client) UpdateLocalFileMetadataCache(meta LocalFileMetadata) error {
 		// We might not have direct equivalents for all fields (e.g., ConfluenceIDs).
 		// Store the essential local file info in available fields or specific local file fields.
 		// Using 'id' for docID, 'url' for originalPath, 'when' for lastModified, 'xxh3' for contentHash
-		ConfluenceIDs: meta.DocID, // Using ConfluenceIDs field to store our internal docID
-		URL:           meta.OriginalPath,
-		When:          meta.LastModified.UTC().Format(time.RFC3339),
-		Xxh3:          meta.ContentHash,
-		SourceType:    "local_folder", // Indicate the source
+		IDs:        meta.DocID, // Using ConfluenceIDs field to store our internal docID
+		URL:        meta.OriginalPath,
+		When:       meta.LastModified.UTC().Format(time.RFC3339),
+		Xxh3:       meta.ContentHash,
+		SourceType: "local_folder", // Indicate the source
 		// Other fields like Title, SpaceKey, Type might be empty or set differently for local files
 	}
 	c.SetDocumentMetadataRecord(meta.DifyDocumentID, recordToStore) // Use the existing method to store
