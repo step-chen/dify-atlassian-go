@@ -1,0 +1,81 @@
+# Directory configuration
+directory:
+  path:
+    - name: example_dir1  # Unique identifier for directory configuration
+      source_path: /path/to/your/source/directory  # Source directory path
+      output_path: /path/to/your/processed/directory  # Output directory path
+      filter:
+        - "*.html"  # File patterns to include
+        - "*.md"
+      excluded_filters:
+        - "*.tmp"  # File patterns to exclude
+
+# AI configuration
+ai:
+  url: http://example.com:11434  # API endpoint URL
+  api_key: your-api-key-here  # Authentication API key
+  model_name: example-model  # Model identifier
+  prompt: |
+    This is a database table documentation. Summarize its content and only output:
+    1. Table name with description
+    2. Field descriptions (including keys and enums)
+    3. SQL CREATE TABLE statement
+    Keep output concise without explanations.
+
+# Content configuration
+content:
+  supported_blocks: []
+  excluded_blocks: 
+    - 'Example Section'
+    - 'Temporary Content'
+
+# Concurrency configuration (remain unchanged)
+concurrency:
+  enabled: true
+  workers: 2
+  queue_size: 4
+  batch_pool_size: 10
+  indexing_timeout: 10
+  max_retries: 0
+  delete_timeout_content: false
+
+# Dify configuration
+dify:
+  base_url: http://example.com/v1
+  api_key: your-dify-api-key-here
+  datasets:
+    example_dir1: your-dataset-id-here
+  rag_setting:
+    indexing_technique: high_quality
+    doc_form: hierarchical_model
+    process_rule:
+      mode: custom
+      rules:
+        pre_processing_rules:
+          - id: remove_extra_spaces
+            enabled: true
+          - id: remove_urls_emails
+            enabled: false
+        segmentation:
+          separator: '\n\n'
+          max_tokens: 4000
+        parent_mode: full-doc
+        subchunk_segmentation:
+          separator: '\n'
+          max_tokens: 1024
+          chunk_overlap: 256
+
+# Media type configurations (remain unchanged)
+allowed_types:
+  text/plain: 0
+  text/markdown: 0
+  # ... (other allowed types)
+
+unsupported_types:
+  application/octet-stream: true
+  # ... (other unsupported types)
+
+# Logging configuration
+log:
+  level: info
+  format: text

@@ -66,22 +66,22 @@ func main() {
 func runProcessingLoop() {
 	// Init Dify clients per directory
 	difyClients = make(map[string]*dify.Client)
-	for _, cfgDir := range cfg.Directory.Paths {
-		datasetID, exists := cfg.Dify.Datasets[cfgDir.Name]
+	for _, cfgPath := range cfg.Directory.Paths {
+		datasetID, exists := cfg.Dify.Datasets[cfgPath.Name]
 		if !exists {
-			log.Fatalf("no dataset mapping configured for directory key: %s", cfgDir.Name)
+			log.Fatalf("no dataset mapping configured for directory key: %s", cfgPath.Name)
 		}
 		if datasetID == "" {
-			log.Fatalf("dataset_id is missing for directory key: %s", cfgDir.Name)
+			log.Fatalf("dataset_id is missing for directory key: %s", cfgPath.Name)
 		}
 		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
 		if err != nil {
-			log.Fatalf("failed to create Dify client for directory key %s (dataset %s): %v", cfgDir.Name, datasetID, err)
+			log.Fatalf("failed to create Dify client for directory key %s (dataset %s): %v", cfgPath.Name, datasetID, err)
 		}
 		if err = client.InitMetadata(); err != nil {
-			log.Fatalf("failed to initialize metadata for directory key %s: %v", cfgDir.Name, err)
+			log.Fatalf("failed to initialize metadata for directory %s: %v", cfgPath.Name, err)
 		}
-		difyClients[cfgDir.Name] = client
+		difyClients[cfgPath.Name] = client
 	}
 
 	// Create worker pool with queue size
@@ -101,14 +101,14 @@ func runProcessingLoop() {
 		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout
 
 		// Process all directories
-		for _, cfgDir := range cfg.Directory.Paths {
-			c, exists := difyClients[cfgDir.Name]
+		for _, cfgPath := range cfg.Directory.Paths {
+			c, exists := difyClients[cfgPath.Name]
 			if !exists {
-				log.Printf("Warning: Dify client not found for directory key %s during processing run %d. Skipping.", cfgDir.Name, i+1)
+				log.Printf("Warning: Dify client not found for directory key %s during processing run %d. Skipping.", cfgPath.Name, i+1)
 				continue
 			}
-			if err := processDirectory(cfgDir, c, &jobChannels); err != nil {
-				log.Printf("error processing directory key %s during run %d: %v", cfgDir.Name, i+1, err)
+			if err := processDirectory(cfgPath, c, &jobChannels); err != nil {
+				log.Printf("error processing directory key %s during run %d: %v", cfgPath.Name, i+1, err)
 			}
 		}
 
@@ -130,10 +130,6 @@ func runProcessingLoop() {
 			log.Printf("Max retries (%d) reached. Some items may not have been processed successfully.", cfg.Concurrency.MaxRetries)
 		}
 	}
-
-	// Close the job channel
-	log.Println("Closing job channel...")
-	close(jobChannels.Jobs)
 
 	// Wait for all workers to complete
 	log.Println("Waiting for all workers to complete...")

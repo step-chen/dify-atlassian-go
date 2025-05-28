@@ -23,6 +23,21 @@ type Config struct {
 	AllowedTypes     map[string]utils.ConversionMethod `yaml:"allowed_types"`     // Allowed media types and their conversion methods
 	UnsupportedTypes map[string]bool                   `yaml:"unsupported_types"` // Unsupported media types
 	Log              LogConfig                         `yaml:"log"`               // Logging configuration
+	AI               AIConfig                          `yaml:"ai"`
+	Content          ContentCfg                        `yaml:"content"` // Content block configuration
+}
+
+type AIConfig struct {
+	URL       string `yaml:"url"`
+	APIKey    string `yaml:"api_key"`
+	ModelName string `yaml:"model_name"`
+	Prompt    string `yaml:"prompt"`
+}
+
+// ContentCfg defines supported and unsupported text blocks
+type ContentCfg struct {
+	SupportedBlocks []string `yaml:"supported_blocks"` // Supported text blocks for processing
+	ExcludedBlocks  []string `yaml:"excluded_blocks"`  // Unsupported text blocks that will be skipped
 }
 
 // GetDifyConfig returns the Dify configuration part.

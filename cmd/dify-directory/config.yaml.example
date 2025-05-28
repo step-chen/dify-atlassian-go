@@ -1,9 +1,17 @@
 # Directory configuration
 directory:
-  # Path to the directory to process
-  path: 
-    dir1: /path/to/your/dir1
-    dir2: /path/to/your/dir2
+  # Path configurations for directories to process
+  path:
+    - name: dir1  # Unique identifier for this directory
+      source_path: /path/to/your/source/dir1  # Actual directory path
+      filter:
+        - "*.md"  # Example file pattern filter
+        - "*.txt"
+    - name: dir2  # Unique identifier for second directory
+      source_path: /path/to/your/source/dir2
+      filter:
+        - "*.html"
+        - "*.yaml"
 
 # Concurrency configuration
 concurrency:

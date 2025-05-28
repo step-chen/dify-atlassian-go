@@ -16,37 +16,71 @@ type Config struct {
 
 // Directory contains directory processing settings
 type Directory struct {
-	Path           map[string]string `yaml:"path"`            // Mapping of directory names to paths
-	FileExtensions []string          `yaml:"file_extensions"` // Allowed file extensions
+	Paths []DirectoryPath `yaml:"path"` // List of directory configurations
+}
+
+type DirectoryPath struct {
+	Name            string   `yaml:"name"`             // Name identifier for the directory
+	SourcePath      string   `yaml:"source_path"`      // Source directory path
+	OutputPath      string   `yaml:"output_path"`      // Output directory path
+	Filter          []string `yaml:"filter"`           // File filters to include
+	ExcludedFilters []string `yaml:"excluded_filters"` // Filters to exclude
 }
 
 // LoadConfig reads, validates and decrypts configuration for directory processing
 func LoadConfig(path string) (*Config, error) {
 	configData, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file '%s': %v", path, err)
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(configData, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config from '%s': %v", path, err)
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	// Decrypt Dify API Key
-	if cfg.Dify.APIKey != "" {
-		decryptedKey, err := config.Decrypt(cfg.Dify.APIKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt Dify API key from '%s': %v", path, err)
-		}
-		cfg.Dify.APIKey = decryptedKey
-	} else {
-		return nil, fmt.Errorf("Dify API key is missing in the configuration file '%s'", path)
+	if err := decryptAPIKey(&cfg, path); err != nil {
+		return nil, err
 	}
 
-	// Apply default concurrency settings if needed
+	setConcurrencyDefaults(&cfg)
+	setLogDefaults(&cfg)
+
+	if err := validateDirectoryPaths(&cfg); err != nil {
+		return nil, err
+	}
+	if err := validateDatasetMappings(&cfg); err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
+}
+
+// decryptAPIKey handles decryption of the Dify API key
+func decryptAPIKey(cfg *Config, path string) error {
+	if cfg.Dify.APIKey == "" {
+		return fmt.Errorf("Dify API key is missing in the config")
+	}
+	decryptedKey, err := config.Decrypt(cfg.Dify.APIKey)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt Dify API key: %w", err)
+	}
+	cfg.Dify.APIKey = decryptedKey
+	return nil
+}
+
+// setConcurrencyDefaults ensures safe minimum values even when Enabled is true
+func setConcurrencyDefaults(cfg *Config) {
 	if !cfg.Concurrency.Enabled {
 		cfg.Concurrency.Workers = 1
 		cfg.Concurrency.QueueSize = 1
+	} else {
+		if cfg.Concurrency.Workers <= 0 {
+			cfg.Concurrency.Workers = 1
+		}
+		if cfg.Concurrency.QueueSize <= 0 {
+			cfg.Concurrency.QueueSize = 1
+		}
 	}
 	if cfg.Concurrency.BatchPoolSize == 0 {
 		cfg.Concurrency.BatchPoolSize = 10
@@ -57,29 +91,35 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.Concurrency.MaxRetries == 0 {
 		cfg.Concurrency.MaxRetries = 2
 	}
+}
 
-	// Validate directory paths
-	if len(cfg.Directory.Path) == 0 {
-		return nil, fmt.Errorf("no directory paths configured in '%s'", path)
-	}
-
-	// Validate Dify dataset mappings
-	if len(cfg.Dify.Datasets) == 0 {
-		return nil, fmt.Errorf("no Dify dataset mappings configured in '%s'", path)
-	}
-	for dirName := range cfg.Directory.Path {
-		if _, exists := cfg.Dify.Datasets[dirName]; !exists {
-			return nil, fmt.Errorf("no dataset_id configured for directory '%s' in '%s'", dirName, path)
-		}
-	}
-
-	// Set default log level and format if not specified
+// setLogDefaults applies default log level and format
+func setLogDefaults(cfg *Config) {
 	if cfg.Log.Level == "" {
 		cfg.Log.Level = "info"
 	}
 	if cfg.Log.Format == "" {
 		cfg.Log.Format = "text"
 	}
+}
 
-	return &cfg, nil
+// validateDirectoryPaths ensures required paths exist
+func validateDirectoryPaths(cfg *Config) error {
+	if len(cfg.Directory.Paths) == 0 {
+		return fmt.Errorf("no directory paths configured")
+	}
+	return nil
+}
+
+// validateDatasetMappings checks that all paths have a matching dataset mapping
+func validateDatasetMappings(cfg *Config) error {
+	if len(cfg.Dify.Datasets) == 0 {
+		return fmt.Errorf("no Dify dataset mappings configured")
+	}
+	for _, cfgPath := range cfg.Directory.Paths {
+		if _, exists := cfg.Dify.Datasets[cfgPath.Name]; !exists {
+			return fmt.Errorf("no dataset_id configured for directory '%s'", cfgPath.Name)
+		}
+	}
+	return nil
 }

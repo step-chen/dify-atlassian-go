@@ -4,6 +4,7 @@ go 1.24.2
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
+	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/cespare/xxhash v1.1.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/stretchr/testify v1.10.0
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/PuerkitoBio/goquery v1.10.3 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

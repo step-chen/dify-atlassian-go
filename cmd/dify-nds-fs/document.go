@@ -16,6 +16,8 @@ import (
 
 // processDirectory processes all files in a given directory
 func processDirectory(cfgDir CFG.DirectoryPath, client *dify.Client, jobChan *JobChannels) error {
+	// Ensure we close the channel when done
+	defer close(jobChan.Jobs)
 	// Get list of files
 	files, err := getDirectoryFiles(cfgDir)
 	if err != nil {
@@ -29,10 +31,32 @@ func processDirectory(cfgDir CFG.DirectoryPath, client *dify.Client, jobChan *Jo
 
 	batchPool.SetTotal(cfgDir.Name, len(files))
 
-	// Process each file operation
+	// Preprocess all files first
+	jobs := make([]*Job, 0, len(files))
+	totalFiles := len(files)
+	processed := 0
+	errorCount := 0
 	for filePath, operation := range files {
-		if err := processOperation(cfgDir, filePath, operation, client, jobChan); err != nil {
-			log.Printf("error processing directory %s file %s: %v", cfgDir.SourcePath, filePath, err)
+		job, err := preprocessingOperation(cfgDir, filePath, operation, client, jobChan)
+		if err != nil {
+			log.Printf("error preprocessing directory %s file %s: %v", cfgDir.SourcePath, filePath, err)
+			errorCount++
+		} else {
+			if job != nil {
+				jobs = append(jobs, job)
+			}
+			processed++
+		}
+		if processed%10 == 0 || processed == totalFiles {
+			log.Printf("processed %d/%d files (%d errors) in directory %s",
+				processed, totalFiles, errorCount, cfgDir.SourcePath)
+		}
+	}
+
+	// Process all jobs after preprocessing
+	for _, job := range jobs {
+		if err := processOperation(job, jobChan); err != nil {
+			log.Printf("error processing directory %s file %s: %v", cfgDir.SourcePath, job.RelativePath, err)
 		}
 	}
 
@@ -140,39 +164,68 @@ func initOperations(client *dify.Client, files map[string]batchpool.Operation) e
 }
 
 // processOperation handles individual file operations
-func processOperation(cfgDir CFG.DirectoryPath, relativePath string, operation batchpool.Operation, client *dify.Client, jobChan *JobChannels) error {
+func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, operation batchpool.Operation, client *dify.Client, jobChan *JobChannels) (*Job, error) {
+	if operation.Action == 2 {
+		j := Job{
+			Type:         operation.Type,
+			DocumentID:   operation.DifyID,
+			RootDir:      cfgDir.SourcePath,
+			RelativePath: relativePath,
+			Client:       client,
+			Op:           operation,
+			DirKey:       cfgDir.Name,
+		}
+
+		jobChan.Jobs <- j
+		return nil, nil
+	}
+
 	// Read file content
 	fp := filepath.Join(cfgDir.SourcePath, relativePath)
-	content, err := os.ReadFile(fp)
+
+	htmlContent, err := utils.AppendHtmlRef(fp, cfgDir.ExcludedFilters, cfg.Content.ExcludedBlocks)
 	if err != nil {
-		return fmt.Errorf("failed to read file %s: %w", fp, err)
+		return nil, fmt.Errorf("failed to read ref for file %s: %w", fp, err)
 	}
 
-	// Convert content to markdown format
-	separator := cfg.Dify.RagSetting.ProcessRule.Rules.Segmentation.Separator
-	if cfg.Dify.RagSetting.ProcessRule.Rules.ParentMode == "full-doc" {
-		separator = ""
-	}
+	content, err := ProcessTextWithAIConfig(cfg.AI, htmlContent)
 
-	markdownContent, err := utils.ConvertFile2Markdown(fp, operation.MediaType, separator, cfg.AllowedTypes[operation.MediaType])
-	if err != nil {
-		log.Printf("warning: failed to convert file %s to markdown: %v", fp, err)
-		// Fallback to original content if conversion fails
-		markdownContent = string(content)
+	outputPath := ""
+	// Write processed content to output directory if configured
+	if cfgDir.OutputPath != "" {
+		outputPath = filepath.Join(cfgDir.OutputPath, relativePath+".md")
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+			return nil, fmt.Errorf("failed to create output directory for %s: %w", outputPath, err)
+		}
+
+		if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
+			return nil, fmt.Errorf("failed to write markdown output file %s: %w", outputPath, err)
+		}
 	}
 
 	j := Job{
-		Type:         operation.Type,
-		DocumentID:   operation.DifyID,
-		RootDir:      cfgDir.SourcePath,
-		RelativePath: relativePath,
-		Content:      markdownContent,
-		Client:       client,
-		Op:           operation,
-		DirKey:       cfgDir.Name,
+		Type:              operation.Type,
+		DocumentID:        operation.DifyID,
+		RootDir:           cfgDir.SourcePath,
+		RelativePath:      relativePath,
+		Client:            client,
+		Op:                operation,
+		DirKey:            cfgDir.Name,
+		PreprocessingFile: outputPath,
 	}
 
-	jobChan.Jobs <- j
+	return &j, nil
+}
+
+// processOperation handles individual file operations
+func processOperation(j *Job, jobChan *JobChannels) error {
+	buf, err := os.ReadFile(j.PreprocessingFile)
+	if err != nil {
+		return err
+	}
+	j.Content = string(buf)
+
+	jobChan.Jobs <- *j
 	return nil
 }
 
