@@ -20,11 +20,18 @@ type Directory struct {
 }
 
 type DirectoryPath struct {
-	Name            string   `yaml:"name"`             // Name identifier for the directory
-	SourcePath      string   `yaml:"source_path"`      // Source directory path
-	OutputPath      string   `yaml:"output_path"`      // Output directory path
-	Filter          []string `yaml:"filter"`           // File filters to include
-	ExcludedFilters []string `yaml:"excluded_filters"` // Filters to exclude
+	Name            string     `yaml:"name"`             // Name identifier for the directory
+	SourcePath      string     `yaml:"source_path"`      // Source directory path
+	OutputPath      string     `yaml:"output_path"`      // Output directory path
+	Filter          []string   `yaml:"filter"`           // File filters to include
+	ExcludedFilters []string   `yaml:"excluded_filters"` // Filters to exclude
+	Content         ContentCfg `yaml:"content"`          // Content block configuration
+}
+
+// ContentCfg defines supported and unsupported text blocks
+type ContentCfg struct {
+	SupportedBlocks []string `yaml:"supported_blocks"` // Supported text blocks for processing
+	ExcludedBlocks  []string `yaml:"excluded_blocks"`  // Unsupported text blocks that will be skipped
 }
 
 // LoadConfig reads, validates and decrypts configuration for directory processing

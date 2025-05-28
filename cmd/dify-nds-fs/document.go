@@ -11,6 +11,7 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	CFG "github.com/step-chen/dify-atlassian-go/internal/config/directory"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
+	AI "github.com/step-chen/dify-atlassian-go/internal/process-ai"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
 
@@ -183,12 +184,12 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 	// Read file content
 	fp := filepath.Join(cfgDir.SourcePath, relativePath)
 
-	htmlContent, err := utils.AppendHtmlRef(fp, cfgDir.ExcludedFilters, cfg.Content.ExcludedBlocks)
+	htmlContent, err := utils.AppendHtmlRef(fp, cfgDir.ExcludedFilters, cfgDir.Content.ExcludedBlocks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ref for file %s: %w", fp, err)
 	}
 
-	content, err := ProcessTextWithAIConfig(cfg.AI, htmlContent)
+	content, err := AI.ProcessTextWithAIConfig(cfg.AI, htmlContent)
 
 	outputPath := ""
 	// Write processed content to output directory if configured
