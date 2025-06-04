@@ -42,11 +42,11 @@ func processSpace(spaceKey string, client *dify.Client, confluenceClient *conflu
 }
 
 func initOperations(client *dify.Client, contents map[string]batchpool.Operation) error {
-	// FetchDocumentsList now returns map[confluenceID]DifyDocumentMetadataRecord
-	// and populates client.metaMapping internally (map[difyID]DifyDocumentMetadataRecord)
-	confluenceIDToDifyRecord, err := client.FetchDocumentsList(0, 100)
+	// FetchDocuments returns map[confluenceID]DocumentMetadataRecord
+	// and populates client.metaMapping internally (map[difyID]DocumentMetadataRecord)
+	confluenceIDToDifyRecord, err := client.FetchDocuments(0, 100)
 	if err != nil {
-		return fmt.Errorf("failed to list documents for dataset %s: %v", client.DatasetID(), err)
+		return fmt.Errorf("failed to list documents for %s: %v", client.BaseURL(), err)
 	}
 
 	// Iterate over the fetched records (keyed by Confluence ID)
@@ -54,21 +54,19 @@ func initOperations(client *dify.Client, contents map[string]batchpool.Operation
 		if op, ok := contents[contentID]; !ok {
 			// Add new operation for unmapped content
 			contents[contentID] = batchpool.Operation{
-				Action:    2, // Delete
-				DifyID:    record.DifyID,
-				DatasetID: client.DatasetID(),
+				Action: batchpool.ActionDelete,
+				DifyID: record.DifyID,
 			}
 		} else {
 			// Update existing operation
 			op.DifyID = record.DifyID
-			op.DatasetID = client.DatasetID()
 
 			// Compare times using utility function (Confluence op vs Dify record)
 			equal := !utils.BeforeRFC3339Times(record.When, op.LastModifiedDate)
 
 			// Determine action based on time comparison
 			if !equal {
-				op.Action = 1 // Update if times differ
+				op.Action = batchpool.ActionUpdate // Update if times differ
 			} else {
 				// Delete the operation since no action is needed
 				delete(contents, contentID)
@@ -97,12 +95,12 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 	var err error
 
 	switch operation.Type {
-	case 0: // page
+	case batchpool.Page:
 		content, err = confluenceClient.GetContent(contentID, cfg.Confluence.OnlyTitle)
 		if err != nil {
 			return fmt.Errorf("failed to get content %s: %w", contentID, err)
 		}
-	case 1: // attachment
+	case batchpool.Attachment:
 		content, err = confluenceClient.GetAttachment(contentID, cfg.Confluence.OnlyTitle)
 		if err != nil {
 			return fmt.Errorf("failed to get attachment %s: %w", contentID, err)
@@ -118,6 +116,7 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 			if err := client.DeleteDocument(operation.DifyID, "confluence", contentID); err != nil {
 				log.Printf("failed to delete empty attachment %s: %v", contentID, err)
 			}
+			log.Printf("Content for %s is empty. Dify document %s (if existed) deleted. Skipping further processing.", contentID, operation.DifyID)
 		}
 		batchPool.MarkTaskComplete(spaceKey)
 		return nil
@@ -150,7 +149,7 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 		batchPool.MarkTaskComplete(j.SpaceKey)
 		return nil
 	} else {
-		j.Op.Action = 0
+		j.Op.Action = batchpool.ActionCreate // Force create if no existing document with this hash
 	}
 
 	jobChan.Jobs <- j
@@ -176,7 +175,6 @@ func createDocument(j *Job) error {
 	}
 
 	j.Op.DifyID = resp.Document.ID
-	j.Op.DatasetID = j.Client.DatasetID()
 	j.Op.StartAt = time.Now()
 	j.Client.SetHashMapping(j.Content.Xxh3, j.Op.DifyID)
 

@@ -87,7 +87,7 @@ func getDirectoryFiles(cfgDir CFG.DirectoryPath) (map[string]batchpool.Operation
 		fp := utils.RemoveRootDir(cfgDir.SourcePath, path)
 		files[fp] = batchpool.Operation{
 			Type:             batchpool.LocalFile,
-			Action:           0, // Create by default
+			Action:           batchpool.ActionCreate, // Create by default
 			LastModifiedDate: modTime,
 			MediaType:        mimeType,
 		}
@@ -101,9 +101,9 @@ func getDirectoryFiles(cfgDir CFG.DirectoryPath) (map[string]batchpool.Operation
 // initOperations initializes file operations based on existing Dify mappings
 func initOperations(client *dify.Client, files map[string]batchpool.Operation) error {
 	// Fetch existing documents
-	filePathToDifyRecord, err := client.FetchDocumentsList(0, 100)
+	filePathToDifyRecord, err := client.FetchDocuments(0, 100)
 	if err != nil {
-		return fmt.Errorf("failed to list documents for dataset %s: %v", client.DatasetID(), err)
+		return fmt.Errorf("failed to list documents for %s: %v", client.BaseURL(), err)
 	}
 
 	// Iterate over existing records
@@ -111,21 +111,19 @@ func initOperations(client *dify.Client, files map[string]batchpool.Operation) e
 		if op, ok := files[filePath]; !ok {
 			// Add delete operation for unmapped files
 			files[filePath] = batchpool.Operation{
-				Action:    2, // Delete
-				DifyID:    record.DifyID,
-				DatasetID: client.DatasetID(),
+				Action: batchpool.ActionDelete, // Delete
+				DifyID: record.DifyID,
 			}
 		} else {
 			// Update existing operation
 			op.DifyID = record.DifyID
-			op.DatasetID = client.DatasetID()
 
 			// Compare modification times
 			equal := !utils.BeforeRFC3339Times(record.When, op.LastModifiedDate)
 
 			// Determine action based on time comparison
 			if !equal {
-				op.Action = 1 // Update if times differ
+				op.Action = batchpool.ActionUpdate // Update if times differ
 			} else {
 				// Skip if no action needed
 				delete(files, filePath)
@@ -196,7 +194,6 @@ func createDocument(j *Job) error {
 	}
 
 	j.Op.DifyID = resp.Document.ID
-	j.Op.DatasetID = j.Client.DatasetID()
 	j.Op.StartAt = time.Now()
 	j.Client.SetHashMapping(j.Client.GetHashByDifyIDFromRecord(resp.Document.ID), j.Op.DifyID)
 

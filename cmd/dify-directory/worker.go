@@ -31,11 +31,11 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 		switch job.Type {
 		case batchpool.LocalFile:
 			switch job.Op.Action {
-			case 0: // Create
+			case batchpool.ActionCreate:
 				if err := createDocument(&job); err != nil {
 					log.Printf("error processing create content job: %v", err)
 				}
-			case 1: // Update (or Create if ID missing - though initOperations should handle this)
+			case batchpool.ActionUpdate:
 				if job.DocumentID == "" {
 					log.Printf("Warning: Update action requested but no DocumentID found for file %s. Attempting create.", job.RelativePath)
 					if err := createDocument(&job); err != nil {
@@ -46,7 +46,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 						log.Printf("error processing update content job: %v", err)
 					}
 				}
-			case 2: // Delete
+			case batchpool.ActionDelete:
 				if job.DocumentID == "" {
 					log.Printf("Warning: Delete action requested but no DocumentID found for file %s. Skipping deletion.", job.RelativePath)
 				} else {
@@ -55,7 +55,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 					}
 				}
 			default:
-				log.Printf("unknown job action type for JobTypeContent: %d", job.Op.Action)
+				log.Printf("unknown job action type %d for LocalFile: %s", job.Op.Action, job.RelativePath)
 			}
 		default:
 			log.Printf("unknown job type: %v", job.Type)

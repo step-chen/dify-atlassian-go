@@ -89,9 +89,9 @@ func (c *Client) ProcessRepository(workspace, repository string) (map[string]bat
 		if !info.IsDir() && c.isAllowedFile(path) {
 			relPath, _ := filepath.Rel(repoPath, path)
 			contents[relPath] = batchpool.Operation{
-				Action:           0,
+				Action:           batchpool.ActionCreate, // Default to Create
 				LastModifiedDate: info.ModTime().Format(time.RFC3339),
-				Type:             0,
+				Type:             batchpool.Page, // Treat files as Page type
 			}
 		}
 		return nil

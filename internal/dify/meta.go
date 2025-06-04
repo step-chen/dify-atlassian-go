@@ -1,7 +1,6 @@
 package dify
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -97,14 +96,12 @@ func (c *Client) EnableBuiltInMetadata(ctx context.Context, enable bool) error {
 	if !enable {
 		action = "disable"
 	}
-	url := fmt.Sprintf("%s/datasets/%s/metadata/built-in/%s", c.baseURL, c.DatasetID(), action)
+	url := fmt.Sprintf("%s/metadata/built-in/%s", c.baseURL, action)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	req, err := c.newRequest(ctx, "POST", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -131,20 +128,12 @@ type CreateMetadataResponse struct {
 }
 
 func (c *Client) CreateMetadata(ctx context.Context, metadata CreateMetadataRequest) (*CreateMetadataResponse, error) {
-	url := fmt.Sprintf("%s/datasets/%s/metadata", c.baseURL, c.DatasetID())
+	url := fmt.Sprintf("%s/metadata", c.baseURL)
 
-	jsonData, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req, err := c.newRequest(ctx, "POST", url, metadata)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -166,14 +155,12 @@ func (c *Client) CreateMetadata(ctx context.Context, metadata CreateMetadataRequ
 }
 
 func (c *Client) GetDatasetMetadata(ctx context.Context) (*MetadataResponse, error) {
-	url := fmt.Sprintf("%s/datasets/%s/metadata", c.baseURL, c.DatasetID())
+	url := fmt.Sprintf("%s/metadata", c.baseURL)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := c.newRequest(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -195,23 +182,16 @@ func (c *Client) GetDatasetMetadata(ctx context.Context) (*MetadataResponse, err
 
 // UpdateDocumentMetadataByFields updates document metadata using field names and values
 func (c *Client) updateDocumentMetadataByRequest(request UpdateDocumentMetadataRequest) error {
-	url := fmt.Sprintf("%s/datasets/%s/documents/metadata", c.baseURL, c.DatasetID())
-	jsonData, err := json.Marshal(request)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
+	url := fmt.Sprintf("%s/documents/metadata", c.baseURL)
 
 	// Create context with 2 minute timeout to prevent hanging
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel() // Ensure context is canceled to release resources
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req, err := c.newRequest(ctx, "POST", url, request)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

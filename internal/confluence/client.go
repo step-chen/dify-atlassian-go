@@ -90,18 +90,18 @@ func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]batc
 		for _, content := range result.Results {
 			// Add page content
 			contents[content.ID] = batchpool.Operation{
-				Action:           0,
+				Action:           batchpool.ActionCreate, // Assuming initial sync means create
 				LastModifiedDate: content.Version.When,
-				Type:             0,
+				Type:             batchpool.Page,
 			}
 
 			// Add attachments
 			for _, att := range content.Children.RawAttachment.Results {
 				if !c.unsupportedTypes[att.Metadata.MediaType] {
 					contents[att.ID] = batchpool.Operation{
-						Action:           0,
+						Action:           batchpool.ActionCreate, // Assuming initial sync means create
 						LastModifiedDate: att.Version.When,
-						Type:             1,
+						Type:             batchpool.Attachment,
 						MediaType:        att.Metadata.MediaType,
 					}
 				}

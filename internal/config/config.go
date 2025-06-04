@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
@@ -117,11 +118,13 @@ type ConcCfg struct {
 // APIKey: Authentication key
 // Datasets: Space to dataset mappings
 // RagSetting: Retrieval-Augmented Generation configuration
+// KeywordWorkerQueueSize: Queue size for the keyword update worker.
 type DifyCfg struct {
-	BaseURL    string            `yaml:"base_url"`    // Base URL for Dify API
-	APIKey     string            `yaml:"api_key"`     // API key for authentication
-	Datasets   map[string]string `yaml:"datasets"`    // Mapping of space keys to dataset IDs
-	RagSetting RagSetting        `yaml:"rag_setting"` // RAG settings
+	BaseURL                string            `yaml:"base_url"`                  // Base URL for Dify API
+	APIKey                 string            `yaml:"api_key"`                   // API key for authentication
+	Datasets               map[string]string `yaml:"datasets"`                  // Mapping of space keys to dataset IDs
+	RagSetting             RagSetting        `yaml:"rag_setting"`               // RAG settings
+	KeywordWorkerQueueSize int               `yaml:"keyword_worker_queue_size"` // Queue size for the keyword update worker
 }
 
 // RagSetting configures Retrieval-Augmented Generation
@@ -153,19 +156,29 @@ func Encrypt(plaintext string) (string, error) {
 		return "", err
 	}
 
-	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
 		return "", err
 	}
 
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], []byte(plaintext))
+	// Never use more than 2^32 random nonces with a given key because of the risk of a repeat.
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
 
-	return base64.URLEncoding.EncodeToString(ciphertext), nil
+	// Seal will encrypt the plaintext and append the authentication tag.
+	// The nonce is prepended to the ciphertext for use during decryption.
+	ciphertextBytes := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+
+	// Prepend nonce to the ciphertext
+	nonceAndCiphertext := append(nonce, ciphertextBytes...)
+
+	return base64.URLEncoding.EncodeToString(nonceAndCiphertext), nil
 }
 
 // Decrypt securely decrypts AES-256 encrypted text
+// It expects the input ciphertext to be base64 encoded, with the nonce prepended to the actual ciphertext.
 // ciphertext: Base64 encoded ciphertext
 // Returns decrypted plaintext or error
 // Parameters:
@@ -180,20 +193,29 @@ func Decrypt(ciphertext string) (string, error) {
 		return "", err
 	}
 
-	decryptedData, err := base64.URLEncoding.DecodeString(ciphertext)
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", err
 	}
 
-	if len(decryptedData) < aes.BlockSize {
-		return "", errors.New("ciphertext too short")
+	nonceAndCiphertextBytes, err := base64.URLEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", err
 	}
 
-	iv := decryptedData[:aes.BlockSize]
-	decryptedData = decryptedData[aes.BlockSize:]
+	nonceSize := gcm.NonceSize()
+	if len(nonceAndCiphertextBytes) < nonceSize {
+		return "", errors.New("ciphertext too short to contain nonce")
+	}
 
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(decryptedData, decryptedData)
+	nonce := nonceAndCiphertextBytes[:nonceSize]
+	actualCiphertext := nonceAndCiphertextBytes[nonceSize:]
 
-	return string(decryptedData), nil
+	plaintextBytes, err := gcm.Open(nil, nonce, actualCiphertext, nil)
+	if err != nil {
+		// This error can occur if the ciphertext was tampered with (authentication failed)
+		return "", fmt.Errorf("failed to decrypt or authenticate: %w", err)
+	}
+
+	return string(plaintextBytes), nil
 }

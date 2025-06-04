@@ -110,23 +110,26 @@ type CreateDocumentResponse struct {
 	Batch string `json:"batch"` // Batch ID for the document creation
 }
 
+// IndexingStatusData holds the detailed status of a single document's indexing process.
+type IndexingStatusData struct {
+	ID                   string  `json:"id"`
+	IndexingStatus       string  `json:"indexing_status"`
+	ProcessingStartedAt  float64 `json:"processing_started_at"`
+	ParsingCompletedAt   float64 `json:"parsing_completed_at"`
+	CleaningCompletedAt  float64 `json:"cleaning_completed_at"`
+	SplittingCompletedAt float64 `json:"splitting_completed_at"`
+	CompletedAt          float64 `json:"completed_at"`
+	PausedAt             float64 `json:"paused_at"`
+	Error                string  `json:"error"`
+	StoppedAt            float64 `json:"stopped_at"`
+	CompletedSegments    int     `json:"completed_segments"`
+	TotalSegments        int     `json:"total_segments"`
+}
+
 // IndexingStatusResponse contains document indexing progress
 // Data: Array of indexing status records
 type IndexingStatusResponse struct {
-	Data []struct {
-		ID                   string  `json:"id"`
-		IndexingStatus       string  `json:"indexing_status"`
-		ProcessingStartedAt  float64 `json:"processing_started_at"`
-		ParsingCompletedAt   float64 `json:"parsing_completed_at"`
-		CleaningCompletedAt  float64 `json:"cleaning_completed_at"`
-		SplittingCompletedAt float64 `json:"splitting_completed_at"`
-		CompletedAt          float64 `json:"completed_at"`
-		PausedAt             float64 `json:"paused_at"`
-		Error                string  `json:"error"`
-		StoppedAt            float64 `json:"stopped_at"`
-		CompletedSegments    int     `json:"completed_segments"`
-		TotalSegments        int     `json:"total_segments"`
-	} `json:"data"`
+	Data []IndexingStatusData `json:"data"`
 }
 
 func (i *IndexingStatusResponse) LastStepAt() time.Time {
@@ -229,14 +232,4 @@ type LocalFileMetadata struct {
 	OriginalPath   string    // The original absolute path of the file when indexed
 	LastModified   time.Time // Last modification time stored in Dify metadata
 	ContentHash    string    // XXH3 hash of the content stored in Dify metadata
-}
-
-// Segment represents a single chunk to be added.
-type Segment struct {
-	Content string `json:"content"`
-}
-
-// AddChunksRequest is the request body for adding segments/chunks to a document.
-type AddChunksRequest struct {
-	Segments []Segment `json:"segments"`
 }

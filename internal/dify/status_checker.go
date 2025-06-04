@@ -11,26 +11,26 @@ import (
 
 // CheckBatchStatus checks the batch status using Dify client
 // This is a method on Client since it uses client-specific operations
-func (c *Client) CheckBatchStatus(ctx context.Context, key, id, title, batch, source string, op batchpool.Operation, indexingTimeout int, deleteTimeoutContent bool) (string, error) {
+func (c *Client) CheckBatchStatus(ctx context.Context, key, id, title, batch, source string, op batchpool.Operation, indexingTimeout int, deleteTimeoutContent bool) (string, batchpool.Operation, error) {
 	// Check for context cancellation first (from BatchPool's task timeout or global shutdown)
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err() // Propagate context error
+		return "", op, ctx.Err() // Propagate context error, return original op
 	default:
 		// Proceed with status check if context is not done
 	}
 
-	status, err := c.GetIndexingStatus(key, batch)
+	status, err := c.GetIndexingStatus(batch)
 	if err != nil {
-		if err.Error() == "unexpected status code: 404" {
-			return "completed", nil
-		} else {
-			return "", err
+		return_status := ""
+		if err.Error() == "unexpected status code: 404" { // TODO: make this more robust than string matching
+			return_status = "completed"
 		}
+		return return_status, op, err
 	}
 	if len(status.Data) > 0 {
 		if status.Data[0].IndexingStatus == "completed" {
-			return "completed", nil
+			return "completed", op, nil
 		}
 		op.StartAt = status.LastStepAt()
 
@@ -44,23 +44,22 @@ func (c *Client) CheckBatchStatus(ctx context.Context, key, id, title, batch, so
 				err := c.DeleteDocument(status.Data[0].ID, source, id)
 				if err != nil {
 					// Error message updated to reflect potential metadata update failure too
-					return "", fmt.Errorf("failed to delete/update timeout document %s for %s content %s: %w", status.Data[0].ID, key, title, err)
+					return "", op, fmt.Errorf("failed to delete/update timeout document %s for %s content %s: %w", status.Data[0].ID, key, title, err)
 				}
 
 				// Store and log the ID for retry
-				if op.Action == 0 {
-					op.Action = 1 // Mark as needing retry (deletion happened)
+				if op.Action == batchpool.ActionCreate {
+					op.Action = batchpool.ActionUpdate // Mark as needing retry (deletion happened, so next attempt might be update or re-create)
 				}
-
-				return "deleted", nil // Marked as deleted, will be retried later
+				return "deleted", op, nil // Marked as deleted, will be retried later
 			} else {
 				// If not configured to delete, simply mark as completed and don't retry
 				log.Printf("Indexing timed out for %s (%s), but configured not to delete. Marking as completed.", title, id)
-				return "timeout", nil
+				return "timeout", op, nil
 			}
 		}
-		return status.Data[0].IndexingStatus, nil
+		return status.Data[0].IndexingStatus, op, nil
 	}
 
-	return "", fmt.Errorf("no status data found")
+	return "", op, fmt.Errorf("no status data found")
 }

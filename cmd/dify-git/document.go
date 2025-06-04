@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -93,10 +94,13 @@ func createDocument(job *Job) error {
 
 	// Add task to batch pool for monitoring
 	job.Op.DifyID = newDifyID // Update operation with Dify ID
-	job.Op.DatasetID = job.Client.DatasetID()
 	job.Op.StartAt = time.Now()
-	// The batch pool submission should happen in the main loop after the job is processed by the worker
-
+	// Add to batch pool for monitoring
+	err = batchPool.Add(context.Background(), job.RepoKey, docID, job.FilePath, resp.Batch, job.Op)
+	if err != nil {
+		log.Printf("Error adding CREATE task to batch pool for %s/%s (DifyID: %s): %v", job.RepoKey, job.FilePath, newDifyID, err)
+		// Consider if the Dify document should be deleted if adding to pool fails.
+	}
 	return nil
 }
 
@@ -172,10 +176,12 @@ func updateDocument(job *Job) error {
 
 	// Add task to batch pool for monitoring
 	job.Op.DifyID = job.DocumentID // Use existing Dify ID
-	job.Op.DatasetID = job.Client.DatasetID()
 	job.Op.StartAt = time.Now()
-	// The batch pool submission should happen in the main loop
-
+	// Add to batch pool for monitoring
+	err = batchPool.Add(context.Background(), job.RepoKey, docID, job.FilePath, resp.Batch, job.Op)
+	if err != nil {
+		log.Printf("Error adding UPDATE task to batch pool for %s/%s (DifyID: %s): %v", job.RepoKey, job.FilePath, job.DocumentID, err)
+	}
 	return nil
 }
 

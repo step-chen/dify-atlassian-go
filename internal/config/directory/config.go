@@ -30,6 +30,7 @@ type DirectoryPath struct {
 
 // ContentCfg defines supported and unsupported text blocks
 type ContentCfg struct {
+	KeywordsBlocks  []string `yaml:"keywords_blocks"`
 	SupportedBlocks []string `yaml:"supported_blocks"` // Supported text blocks for processing
 	ExcludedBlocks  []string `yaml:"excluded_blocks"`  // Unsupported text blocks that will be skipped
 }

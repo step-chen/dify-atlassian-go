@@ -22,13 +22,23 @@ const (
 	LocalFile
 )
 
+// ActionType defines the type of operation to be performed.
+type ActionType int8
+
+const (
+	ActionCreate   ActionType = 0  // Represents a create operation
+	ActionUpdate   ActionType = 1  // Represents an update operation
+	ActionDelete   ActionType = 2  // Represents a delete operation
+	ActionNoAction ActionType = -1 // Represents no action
+)
+
 type Operation struct {
-	Action           int8        // 0: create, 1: update, 2: delete, -1: no action
-	Type             ContentType // 0: page, 1: attachment
+	Action ActionType  // 0: create, 1: update, 2: delete, -1: no action
+	Type   ContentType // 0: page, 1: attachment
+
 	LastModifiedDate string
 	MediaType        string // Mime type
 	DifyID           string
-	DatasetID        string
 	StartAt          time.Time
 }
 
@@ -47,7 +57,7 @@ type Progress struct {
 
 type BatchPool struct {
 	maxWorkers    int
-	statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, error)
+	statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, Operation, error)
 	taskQueue     chan Task
 	workersWg     sync.WaitGroup // Waits for worker goroutines to finish on Close
 	overallWg     sync.WaitGroup // Waits for all submitted tasks to complete processing
@@ -63,7 +73,7 @@ type BatchPool struct {
 	timeoutMutex    sync.Mutex                      // Mutex for protecting timeoutContents
 }
 
-func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, error), concurrencyCfg config.ConcCfg) *BatchPool { // Accept ConcCfg directly
+func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, Operation, error), concurrencyCfg config.ConcCfg) *BatchPool { // Accept ConcCfg directly
 	if maxWorkers <= 0 {
 		maxWorkers = 1
 	}
@@ -171,18 +181,18 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	for {
 		select {
 		case <-ticker.C:
-			status, err := bp.statusChecker(ctx, task.key, task.id, task.title, task.batch, task.op)
+			status, modifiedOp, err := bp.statusChecker(ctx, task.key, task.id, task.title, task.batch, task.op)
 			progressStr := bp.ProgressString(task.key) // Get current progress string
 
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					log.Printf("[CANCELLED] %s - %s Monitoring cancelled or timed out internally: %v", progressStr, logPrefix, err)
-					// Let the outer context timeout handle the final state
 				} else {
 					log.Printf("[ERROR] %s - %s Failed status check: %v. Retrying...", progressStr, logPrefix, err)
-					// Continue loop to retry
 				}
 			} else {
+				task.op = modifiedOp // Update the task's operation with the one returned by statusChecker
+
 				if status == "completed" {
 					bp.MarkTaskComplete(task.key) // Mark first
 					// Add chunks using the document name as content after successful creation

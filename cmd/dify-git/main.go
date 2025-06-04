@@ -52,13 +52,13 @@ func main() {
 	batchPool = batchpool.NewBatchPool(
 		cfg.Concurrency.BatchPoolSize,
 		cfg.Concurrency.QueueSize,
-		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, error) {
+		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, batchpool.Operation, error) {
 			// 'key' in the context of Git will be the repoKey (workspace/repo)
 			client, exists := difyClients[key]
 			if !exists {
 				// This shouldn't happen if initialization is correct
 				log.Printf("Error: Dify client not found for repoKey '%s' during status check.", key)
-				return "error", fmt.Errorf("dify client not found for repoKey %s", key)
+				return "error", op, fmt.Errorf("dify client not found for repoKey %s", key)
 			}
 			// Use the CheckBatchStatus method from the dify client package
 			// Note: CheckBatchStatus might need adjustments if it assumes Confluence-specific logic
@@ -88,7 +88,7 @@ func main() {
 				log.Fatalf("Dify dataset mapping missing or empty for repository: %s", key)
 			}
 
-			client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg) // Pass cfg as provider
+			client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg, false) // Pass cfg as provider
 			if err != nil {
 				log.Fatalf("Failed to create Dify client for repo %s (dataset %s): %v", key, datasetID, err)
 			}
@@ -171,13 +171,13 @@ func processAllRepositories(jobChannels *JobChannels) {
 
 			// Fetch existing Dify metadata for this dataset
 			// Use GetAllDocumentsMetadata which is designed for local file sync
-			log.Printf("Fetching existing Dify metadata for dataset %s...", difyClient.DatasetID())
+			log.Printf("Fetching existing Dify metadata for %s...", difyClient.BaseURL())
 			difyMetadataMap, err := difyClient.GetAllDocumentsMetadata()
 			if err != nil {
 				log.Printf("Error fetching Dify metadata for repo %s: %v. Skipping repo.", key, err)
 				continue // Skip this repo if we can't get metadata
 			}
-			log.Printf("Found %d existing metadata records in Dify for dataset %s.", len(difyMetadataMap), difyClient.DatasetID())
+			log.Printf("Found %d existing metadata records in Dify for %s.", len(difyMetadataMap), difyClient.BaseURL())
 
 			// Get local file list and basic info
 			localFileOps, err := gitClient.ProcessRepository(workspace, repoName)
@@ -202,10 +202,10 @@ func processAllRepositories(jobChannels *JobChannels) {
 
 				existingMeta, metaExists := difyMetadataMap[docID]
 
-				action := -1 // -1: No action, 0: Create, 1: Update
+				action := batchpool.ActionNoAction // Use ActionType constants
 
 				if !metaExists {
-					action = 0 // Create if not in Dify metadata
+					action = batchpool.ActionCreate // Create if not in Dify metadata
 					log.Printf("Detected CREATE for %s", localRelPath)
 				} else {
 					// Exists in Dify, check if update needed (compare hash)
@@ -218,7 +218,7 @@ func processAllRepositories(jobChannels *JobChannels) {
 					localHash = utils.XXH3FromBytes(contentBytes)
 
 					if localHash != existingMeta.ContentHash {
-						action = 1 // Update if hash differs
+						action = batchpool.ActionUpdate // Update if hash differs
 						log.Printf("Detected UPDATE for %s (Local Hash: %s, Dify Hash: %s)", localRelPath, localHash, existingMeta.ContentHash)
 					} else {
 						// Hashes match, no update needed based on content
@@ -234,7 +234,7 @@ func processAllRepositories(jobChannels *JobChannels) {
 				}
 
 				// Create and dispatch job if Create (0) or Update (1)
-				if action == 0 || action == 1 {
+				if action == batchpool.ActionCreate || action == batchpool.ActionUpdate {
 					job := Job{
 						Type:       batchpool.Page, // Treat files as Pages
 						RepoKey:    key,
@@ -245,13 +245,13 @@ func processAllRepositories(jobChannels *JobChannels) {
 						FileHash:   localHash, // Pass calculated hash (might be empty if create)
 						DocumentID: "",        // Will be empty for create, set for update below
 						Op: batchpool.Operation{
-							Action:           int8(action),
+							Action:           action, // Use ActionType directly
 							Type:             batchpool.Page,
 							LastModifiedDate: localOp.LastModifiedDate, // From gitClient.ProcessRepository
 							// DifyID and DatasetID will be set in document.go after API call
 						},
 					}
-					if action == 1 {
+					if action == batchpool.ActionUpdate {
 						job.DocumentID = existingMeta.DifyDocumentID // Set Dify ID for updates
 					}
 
@@ -259,7 +259,13 @@ func processAllRepositories(jobChannels *JobChannels) {
 					select {
 					case jobChannels.Jobs <- job:
 						totalJobsCreated++
-						log.Printf("Dispatched %s job for %s", []string{"CREATE", "UPDATE"}[action], localRelPath)
+						actionName := "UNKNOWN"
+						if action == batchpool.ActionCreate {
+							actionName = "CREATE"
+						} else if action == batchpool.ActionUpdate {
+							actionName = "UPDATE"
+						}
+						log.Printf("Dispatched %s job for %s", actionName, localRelPath)
 					default:
 						log.Printf("Warning: Job channel full. Blocking or dropping job for %s", localRelPath)
 						// Handle channel full scenario if necessary (e.g., wait or log/drop)
@@ -286,7 +292,7 @@ func processAllRepositories(jobChannels *JobChannels) {
 						GitClient:  gitClient,
 						DocumentID: meta.DifyDocumentID, // Dify ID is needed for deletion
 						Op: batchpool.Operation{
-							Action: 2, // Delete
+							Action: batchpool.ActionDelete, // Delete
 							Type:   batchpool.Page,
 							DifyID: meta.DifyDocumentID, // Set Dify ID here for the operation log
 							// LastModifiedDate not relevant for delete

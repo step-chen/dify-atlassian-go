@@ -39,12 +39,12 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 		switch job.Type {
 		case batchpool.Page: // Treat files as Pages
 			switch job.Op.Action {
-			case 0: // Create
+			case batchpool.ActionCreate:
 				log.Printf("Worker received CREATE job for Repo: %s, File: %s", job.RepoKey, job.FilePath)
 				if err := createDocument(&job); err != nil {
 					log.Printf("Error processing create document job for %s/%s: %v", job.RepoKey, job.FilePath, err)
 				}
-			case 1: // Update
+			case batchpool.ActionUpdate:
 				if job.DocumentID == "" {
 					// This case might happen if the initial sync failed but the file exists.
 					// Or if the state tracking got out of sync. Attempt create.
@@ -58,7 +58,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 						log.Printf("Error processing update document job for %s/%s: %v", job.RepoKey, job.FilePath, err)
 					}
 				}
-			case 2: // Delete
+			case batchpool.ActionDelete:
 				if job.DocumentID == "" {
 					// Should not happen if state tracking is correct, but log a warning.
 					log.Printf("Warning: Delete action requested but no DocumentID found for Repo: %s, File: %s. Skipping deletion.", job.RepoKey, job.FilePath)

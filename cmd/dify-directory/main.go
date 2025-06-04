@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"sync"
 
@@ -38,8 +39,14 @@ func main() {
 	batchPool = batchpool.NewBatchPool(
 		cfg.Concurrency.BatchPoolSize,
 		cfg.Concurrency.QueueSize,
-		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, error) {
-			return difyClients[key].CheckBatchStatus(
+		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, batchpool.Operation, error) {
+			client, ok := difyClients[key]
+			if !ok {
+				err := fmt.Errorf("dify client not found for key %s in statusChecker", key)
+				log.Println(err.Error())
+				return "", op, err // Return original op and an error
+			}
+			return client.CheckBatchStatus(
 				ctx,
 				key,
 				id,
@@ -74,7 +81,7 @@ func runProcessingLoop() {
 		if datasetID == "" {
 			log.Fatalf("dataset_id is missing for directory key: %s", cfgDir.Name)
 		}
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg, false)
 		if err != nil {
 			log.Fatalf("failed to create Dify client for directory key %s (dataset %s): %v", cfgDir.Name, datasetID, err)
 		}

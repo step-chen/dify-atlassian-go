@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"sync"
 
@@ -38,14 +39,20 @@ func main() {
 	batchPool = batchpool.NewBatchPool(
 		cfg.Concurrency.BatchPoolSize,
 		cfg.Concurrency.QueueSize,
-		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, error) {
-			return difyClients[key].CheckBatchStatus(
+		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, batchpool.Operation, error) {
+			client, ok := difyClients[key]
+			if !ok {
+				errMsg := fmt.Sprintf("dify client not found for key %s in statusChecker", key)
+				log.Println(errMsg)
+				return "", op, fmt.Errorf(errMsg) // Return original op and an error
+			}
+			return client.CheckBatchStatus(
 				ctx,
 				key,
 				id,
 				title,
 				batch,
-				"file",
+				"file", // source
 				op,
 				cfg.Concurrency.IndexingTimeout,
 				cfg.Concurrency.DeleteTimeoutContent,
@@ -64,6 +71,8 @@ func main() {
 }
 
 func runProcessingLoop() {
+	originalIndexingTimeout := cfg.Concurrency.IndexingTimeout // Store the original timeout
+
 	// Init Dify clients per directory
 	difyClients = make(map[string]*dify.Client)
 	for _, cfgPath := range cfg.Directory.Paths {
@@ -74,7 +83,7 @@ func runProcessingLoop() {
 		if datasetID == "" {
 			log.Fatalf("dataset_id is missing for directory key: %s", cfgPath.Name)
 		}
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg)
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg, false)
 		if err != nil {
 			log.Fatalf("failed to create Dify client for directory key %s (dataset %s): %v", cfgPath.Name, datasetID, err)
 		}
@@ -98,7 +107,7 @@ func runProcessingLoop() {
 
 	// Process directories with retries
 	for i := 0; i < cfg.Concurrency.MaxRetries+1; i++ {
-		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout
+		cfg.Concurrency.IndexingTimeout = (i + 1) * originalIndexingTimeout // Use original for calculation
 
 		// Process all directories
 		for _, cfgPath := range cfg.Directory.Paths {

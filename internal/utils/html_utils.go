@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -17,6 +18,75 @@ import (
 type Link struct {
 	URL   string
 	Title string
+}
+
+func ExtractKeywords(doc *goquery.Document, keywordsBlocks []string) []string {
+	// 输入验证
+	if doc == nil || len(keywordsBlocks) == 0 {
+		return []string{}
+	}
+
+	// 创建允许标签的集合
+	allowedTags := make(map[string]bool)
+	for _, tag := range keywordsBlocks {
+		allowedTags[strings.ToLower(tag)] = true
+	}
+
+	var keywords []string
+
+	// 遍历所有元素节点
+	doc.Find("*").Each(func(i int, s *goquery.Selection) {
+		// 获取当前标签名
+		tagName := strings.ToLower(s.Nodes[0].Data)
+
+		// 如果是script或style标签，跳过处理
+		if tagName == "script" || tagName == "style" {
+			return
+		}
+
+		// 如果当前标签在允许的标签列表中
+		if allowedTags[tagName] {
+			// 获取文本内容并提取关键词
+			text := s.Text()
+			words := splitWords(text)
+			keywords = append(keywords, words...)
+		}
+	})
+
+	return deduplicate(keywords)
+}
+
+// splitWords splits text into individual words
+func splitWords(text string) []string {
+	// Split on non-alphanumeric characters and convert to lowercase
+	words := strings.FieldsFunc(text, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+
+	var cleanedWords []string
+	for _, word := range words {
+		cleaned := strings.ToLower(strings.TrimSpace(word))
+		if cleaned != "" {
+			cleanedWords = append(cleanedWords, cleaned)
+		}
+	}
+
+	return cleanedWords
+}
+
+// deduplicate removes duplicate keywords
+func deduplicate(strs []string) []string {
+	seen := make(map[string]bool)
+	var result []string
+
+	for _, s := range strs {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+
+	return result
 }
 
 // combineContentWithReferences takes the original HTML content and the extracted links.
@@ -80,28 +150,19 @@ func combineContentWithReferences(originalHTMLContent []byte, links []Link, unsu
 	}
 }
 
-// AppendHtmlRef reads an HTML file, extracts and normalizes unique local file references (URLs).
+// AppendHtmlRef processes an HTML document, extracts and normalizes unique local file references (URLs).
 // It performs validation and deduplication but does NOT read the content of linked files into Link struct.
-func AppendHtmlRef(filePath string, unsupportedFilters []string, unsupportedBlocks []string) (string, error) {
-	originalHTMLContentBytes, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
-	}
-
-	// Normalize whitespace for the original HTML content
-	originalHTMLContentBytes = normalizeHTMLWhitespace(originalHTMLContentBytes)
-
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(originalHTMLContentBytes))
-	if err != nil {
-		return "", fmt.Errorf("failed to parse HTML: %w", err)
-	}
+func AppendHtmlRef(doc *goquery.Document, unsupportedFilters []string, unsupportedBlocks []string) (string, error) {
 
 	// Apply block removal to the original document itself
 	removeUnsupportedBlocks(doc, unsupportedBlocks)
 
 	var links []Link
 	seenURLs := make(map[string]struct{}) // Use a map as a set for deduplication
-	baseDir := filepath.Dir(filePath)
+	baseDir := ""
+	if doc.Url != nil {
+		baseDir = filepath.Dir(doc.Url.Path)
+	}
 
 	// Convert unsupported filters to a Set for efficient lookups
 	unsupportedFilterSet := make(map[string]struct{})

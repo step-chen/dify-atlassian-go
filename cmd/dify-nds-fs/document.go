@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	CFG "github.com/step-chen/dify-atlassian-go/internal/config/directory"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
@@ -17,8 +19,6 @@ import (
 
 // processDirectory processes all files in a given directory
 func processDirectory(cfgDir CFG.DirectoryPath, client *dify.Client, jobChan *JobChannels) error {
-	// Ensure we close the channel when done
-	defer close(jobChan.Jobs)
 	// Get list of files
 	files, err := getDirectoryFiles(cfgDir)
 	if err != nil {
@@ -29,6 +29,15 @@ func processDirectory(cfgDir CFG.DirectoryPath, client *dify.Client, jobChan *Jo
 	if err := initOperations(client, files); err != nil {
 		return fmt.Errorf("error initializing operations for directory %s: %w", cfgDir.SourcePath, err)
 	}
+
+	defer func() {
+		log.Printf("=========================================================")
+		log.Printf("All operations for directory %s have been processed.", cfgDir.SourcePath)
+		log.Printf("=========================================================")
+	}()
+
+	// Ensure we close the channel when done
+	defer close(jobChan.Jobs)
 
 	batchPool.SetTotal(cfgDir.Name, len(files))
 
@@ -60,10 +69,6 @@ func processDirectory(cfgDir CFG.DirectoryPath, client *dify.Client, jobChan *Jo
 			log.Printf("error processing directory %s file %s: %v", cfgDir.SourcePath, job.RelativePath, err)
 		}
 	}
-
-	log.Printf("=========================================================")
-	log.Printf("All operations for directory %s have been processed.", cfgDir.SourcePath)
-	log.Printf("=========================================================")
 
 	return nil
 }
@@ -112,7 +117,7 @@ func getDirectoryFiles(cfgDir CFG.DirectoryPath) (map[string]batchpool.Operation
 		fp := utils.RemoveRootDir(cfgDir.SourcePath, path)
 		files[fp] = batchpool.Operation{
 			Type:             batchpool.LocalFile,
-			Action:           0, // Create by default
+			Action:           batchpool.ActionCreate, // Create by default
 			LastModifiedDate: modTime,
 			MediaType:        mimeType,
 		}
@@ -126,9 +131,9 @@ func getDirectoryFiles(cfgDir CFG.DirectoryPath) (map[string]batchpool.Operation
 // initOperations initializes file operations based on existing Dify mappings
 func initOperations(client *dify.Client, files map[string]batchpool.Operation) error {
 	// Fetch existing documents
-	filePathToDifyRecord, err := client.FetchDocumentsList(0, 100)
+	filePathToDifyRecord, err := client.FetchDocuments(0, 100)
 	if err != nil {
-		return fmt.Errorf("failed to list documents for dataset %s: %v", client.DatasetID(), err)
+		return fmt.Errorf("failed to list documents for %s: %v", client.BaseURL(), err)
 	}
 
 	// Iterate over existing records
@@ -136,21 +141,19 @@ func initOperations(client *dify.Client, files map[string]batchpool.Operation) e
 		if op, ok := files[filePath]; !ok {
 			// Add delete operation for unmapped files
 			files[filePath] = batchpool.Operation{
-				Action:    2, // Delete
-				DifyID:    record.DifyID,
-				DatasetID: client.DatasetID(),
+				Action: batchpool.ActionDelete,
+				DifyID: record.DifyID,
 			}
 		} else {
 			// Update existing operation
 			op.DifyID = record.DifyID
-			op.DatasetID = client.DatasetID()
 
 			// Compare modification times
 			equal := !utils.BeforeRFC3339Times(record.When, op.LastModifiedDate)
 
 			// Determine action based on time comparison
 			if !equal {
-				op.Action = 1 // Update if times differ
+				op.Action = batchpool.ActionUpdate // Update if times differ
 			} else {
 				// Skip if no action needed
 				delete(files, filePath)
@@ -166,7 +169,7 @@ func initOperations(client *dify.Client, files map[string]batchpool.Operation) e
 
 // processOperation handles individual file operations
 func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, operation batchpool.Operation, client *dify.Client, jobChan *JobChannels) (*Job, error) {
-	if operation.Action == 2 {
+	if operation.Action == batchpool.ActionDelete {
 		j := Job{
 			Type:         operation.Type,
 			DocumentID:   operation.DifyID,
@@ -184,35 +187,56 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 	// Read file content
 	fp := filepath.Join(cfgDir.SourcePath, relativePath)
 
-	htmlContent, err := utils.AppendHtmlRef(fp, cfgDir.ExcludedFilters, cfgDir.Content.ExcludedBlocks)
+	// Read and parse HTML document
+	fileContent, err := os.ReadFile(fp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read ref for file %s: %w", fp, err)
+		return nil, fmt.Errorf("failed to read file %s: %w", fp, err)
 	}
 
-	content, err := AI.ProcessTextWithAIConfig(cfg.AI, htmlContent)
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(fileContent))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse HTML for file %s: %w", fp, err)
+	}
 
-	outputPath := ""
+	// Extract keywords from parsed document
+	keywords := utils.ExtractKeywords(doc, cfgDir.Content.KeywordsBlocks)
+
+	// Process HTML references
+	htmlContent, err := utils.AppendHtmlRef(doc, cfgDir.ExcludedFilters, cfgDir.Content.ExcludedBlocks)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process HTML references for file %s: %w", fp, err)
+	}
+
+	processedContent, err := AI.ProcessTextWithAIConfig(cfg.AI, htmlContent)
+	if err != nil {
+		return nil, fmt.Errorf("AI processing failed for file %s: %w", fp, err)
+	}
+
+	j := Job{
+		Type:         operation.Type,
+		Keywords:     keywords,
+		DocumentID:   operation.DifyID,
+		RootDir:      cfgDir.SourcePath,
+		RelativePath: relativePath,
+		Client:       client,
+		Op:           operation,
+		DirKey:       cfgDir.Name,
+		// Content and PreprocessingFile are set below
+	}
+
 	// Write processed content to output directory if configured
 	if cfgDir.OutputPath != "" {
-		outputPath = filepath.Join(cfgDir.OutputPath, relativePath+".md")
+		outputPath := filepath.Join(cfgDir.OutputPath, relativePath+".md")
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 			return nil, fmt.Errorf("failed to create output directory for %s: %w", outputPath, err)
 		}
 
-		if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(outputPath, []byte(processedContent), 0644); err != nil {
 			return nil, fmt.Errorf("failed to write markdown output file %s: %w", outputPath, err)
 		}
-	}
-
-	j := Job{
-		Type:              operation.Type,
-		DocumentID:        operation.DifyID,
-		RootDir:           cfgDir.SourcePath,
-		RelativePath:      relativePath,
-		Client:            client,
-		Op:                operation,
-		DirKey:            cfgDir.Name,
-		PreprocessingFile: outputPath,
+		j.PreprocessingFile = outputPath
+	} else {
+		j.Content = processedContent // Store content directly in the job if no output path is specified
 	}
 
 	return &j, nil
@@ -250,7 +274,6 @@ func createDocument(j *Job) error {
 	}
 
 	j.Op.DifyID = resp.Document.ID
-	j.Op.DatasetID = j.Client.DatasetID()
 	j.Op.StartAt = time.Now()
 	j.Client.SetHashMapping(j.Client.GetHashByDifyIDFromRecord(resp.Document.ID), j.Op.DifyID)
 
