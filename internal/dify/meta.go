@@ -15,7 +15,7 @@ import (
 // Supported field types for metadata
 // Added fields for local folder sync: doc_id, original_path, last_modified, content_hash
 var metaFields = []string{
-	"url", "source_type", "type", "space_key", "download", "id", "last_modified", "last_modified_date", "xxh3", // Confluence fields
+	"title", "url", "source_type", "type", "space_key", "download", "id", "last_modified", "last_modified_date", "xxh3", // Confluence fields
 }
 
 type MetaField struct {
@@ -293,6 +293,7 @@ func (c *Client) buildApiMetadataPayload(params DocumentMetadataRecord, finalCon
 	metadataToUpdate := []DocumentMetadata{}
 
 	// Use fields directly from the params (DocumentMetadataRecord) struct
+	c.addMetadataIfValid(&metadataToUpdate, "title", params.Title)
 	c.addMetadataIfValid(&metadataToUpdate, "url", params.URL)
 	c.addMetadataIfValid(&metadataToUpdate, "source_type", source) // Always set source_type for API
 	c.addMetadataIfValid(&metadataToUpdate, "type", params.Type)

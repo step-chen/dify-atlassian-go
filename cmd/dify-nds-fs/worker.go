@@ -10,6 +10,7 @@ import (
 
 // Job represents a directory file processing job
 type Job struct {
+	Title             string
 	Type              batchpool.ContentType // Type of job
 	DocumentID        string                // Document ID
 	RootDir           string

@@ -214,11 +214,14 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 	}
 
 	// Extract keywords from the first markdown title in the processed content
-	titleKeywords := utils.ExtractMarkdownTitleKeywords(processedContent)
-	operation.Keywords = append(operation.Keywords, titleKeywords...)
-	operation.Keywords = utils.RemoveDuplicates(operation.Keywords)
+	title := utils.ExtractMarkdownTitleKeywords(processedContent)
+	if title != "" {
+		operation.Keywords = append(operation.Keywords, title)
+		operation.Keywords = utils.RemoveDuplicates(operation.Keywords)
+	}
 
 	j := Job{
+		Title:        title,
 		Type:         operation.Type,
 		DocumentID:   operation.DifyID,
 		RootDir:      cfgDir.SourcePath,
@@ -284,6 +287,7 @@ func createDocument(j *Job) error {
 
 	// Update document metadata using the new struct
 	params := dify.DocumentMetadataRecord{
+		Title:      j.Title,
 		IDToAdd:    j.RelativePath,
 		URL:        j.RelativePath,
 		SourceType: "directory",
@@ -332,6 +336,7 @@ func updateDocument(j *Job) error {
 
 	// Update document metadata using the new struct
 	params := dify.DocumentMetadataRecord{
+		Title:      j.Title,
 		URL:        j.RelativePath,
 		SourceType: "directory",
 		Type:       "html",
