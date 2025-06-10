@@ -167,7 +167,7 @@ func createDocument(j *Job) error {
 		DocForm:           cfg.Dify.RagSetting.DocForm,
 	}
 
-	resp, err := j.Client.CreateDocumentByText(&docRequest)
+	resp, err := j.Client.CreateDocumentByText(&docRequest, nil)
 
 	if err != nil {
 		log.Printf("failed to create Dify document for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
@@ -217,7 +217,7 @@ func updateDocument(j *Job) error {
 		Text: j.Content.Title,
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest)
+	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, j.Op.Keywords)
 
 	if err != nil {
 		log.Printf("failed to update Dify document for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)

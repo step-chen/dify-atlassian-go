@@ -60,7 +60,7 @@ func createDocument(job *Job) error {
 	}
 
 	// Call Dify API
-	resp, err := job.Client.CreateDocumentByText(createReq)
+	resp, err := job.Client.CreateDocumentByText(createReq, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create document in Dify for %s: %w", job.FilePath, err)
 	}
@@ -144,7 +144,7 @@ func updateDocument(job *Job) error {
 	}
 
 	// Call Dify API
-	resp, err := job.Client.UpdateDocumentByText(job.DocumentID, updateReq)
+	resp, err := job.Client.UpdateDocumentByText(job.DocumentID, updateReq, job.Op.Keywords)
 	if err != nil {
 		return fmt.Errorf("failed to update document %s in Dify for %s: %w", job.DocumentID, job.FilePath, err)
 	}

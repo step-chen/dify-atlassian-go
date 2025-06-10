@@ -39,25 +39,16 @@ func main() {
 	batchPool = batchpool.NewBatchPool(
 		cfg.Concurrency.BatchPoolSize,
 		cfg.Concurrency.QueueSize,
-		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, batchpool.Operation, error) {
-			client, ok := difyClients[key]
-			if !ok {
+		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (int, string, batchpool.Operation, error) {
+			if c, ok := difyClients[key]; !ok {
 				err := fmt.Errorf("dify client not found for key %s in statusChecker", key)
 				log.Println(err.Error())
-				return "", op, err // Return original op and an error
+				return -1, "", op, err
+			} else {
+				return c.CheckBatchStatus(ctx, key, id, title, batch, "file", op, cfg.Concurrency.IndexingTimeout, cfg.Concurrency.DeleteTimeoutContent)
 			}
-			return client.CheckBatchStatus(
-				ctx,
-				key,
-				id,
-				title,
-				batch,
-				"file",
-				op,
-				cfg.Concurrency.IndexingTimeout,
-				cfg.Concurrency.DeleteTimeoutContent,
-			)
 		},
+		nil,
 		cfg.Concurrency,
 	)
 

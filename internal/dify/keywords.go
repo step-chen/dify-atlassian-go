@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -29,66 +28,121 @@ type SegmentReq struct {
 	RegenerateChildChunks bool     `json:"regenerate_child_chunks,omitempty"`
 }
 
-// Job represents a keyword update job for a document
-type Job struct {
-	DocumentID string   // Document ID to update
-	Keywords   []string // Keywords to update for document segments
-}
-
-type JobChannels struct {
-	Jobs chan Job
-}
-
-// InitKeywordProcessor initializes and starts the keyword processing workers.
-// numWorkers: the number of concurrent workers to process keyword updates.
-// jobQueueSize: the buffer size of the job channel.
-func (c *Client) InitKeywordProcessor(jobQueueSize int) error {
-	if jobQueueSize < 0 { // 0 is acceptable for unbuffered, but usually >0 is better
-		return fmt.Errorf("jobQueueSize must be non-negative")
+func (c *Client) UpdateKeywords(difyID string) (err error) {
+	keywords := c.getKeywordsCache(difyID)
+	if len(keywords) > 0 {
+		if err = c.updateDocumentKeywords(difyID, keywords); err != nil {
+			return fmt.Errorf("error updating keywords for document %s: %v", difyID, err)
+		}
+		c.removeKeywordsCache(difyID)
 	}
 
-	c.keywordChannels = &JobChannels{
-		Jobs: make(chan Job, jobQueueSize),
-	}
-
-	// Support single worker. numWorkers is validated to be positive, but only one worker is started.
-	log.Printf("Starting 1 keyword worker with queue size %d.", jobQueueSize)
-	c.keywordWg.Add(1)
-	go c.workerKeywords(c.keywordChannels.Jobs, &c.keywordWg)
 	return nil
 }
 
-// worker processes keyword update jobs from the channel
-func (c *Client) workerKeywords(jobChan <-chan Job, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for job := range jobChan {
-		if err := c.updateDocumentKeywords(&job); err != nil {
-			log.Printf("error processing keyword update job for document %s: %v", job.DocumentID, err)
+func (c *Client) setKeywordsCache(difyID string, keywords []string) {
+	c.docKeywordsMutex.Lock()
+	defer c.docKeywordsMutex.Unlock()
+	if c.docKeywords == nil { // Ensure the map is initialized
+		c.docKeywords = make(map[string][]string)
+	}
+	if len(keywords) == 0 {
+		delete(c.docKeywords, difyID)
+	} else {
+		c.docKeywords[difyID] = keywords
+	}
+}
+
+// removeKeywordsCache removes the keywords for a given Dify document ID from the cache.
+func (c *Client) removeKeywordsCache(difyID string) {
+	c.docKeywordsMutex.Lock()
+	defer c.docKeywordsMutex.Unlock()
+	if c.docKeywords == nil {
+		return // Nothing to do if the map isn't initialized
+	}
+	delete(c.docKeywords, difyID)
+}
+
+func (c *Client) getKeywordsCache(difyID string) []string {
+	c.docKeywordsMutex.RLock()
+	defer c.docKeywordsMutex.RUnlock()
+	if c.docKeywords == nil {
+		return nil
+	}
+	keywords, exists := c.docKeywords[difyID]
+	if !exists {
+		return nil
+	}
+	// Return a copy to prevent external modification of the internal slice
+	keywordsCopy := make([]string, len(keywords))
+	copy(keywordsCopy, keywords)
+	return keywordsCopy
+}
+
+func (c *Client) finalizeKeywords() {
+	c.docKeywordsMutex.Lock()
+	if len(c.docKeywords) == 0 {
+		c.docKeywordsMutex.Unlock()
+		log.Println("No document keywords to finalize.")
+		return
+	}
+
+	// Create a snapshot of the current keywords to process
+	keywordsToProcess := make(map[string][]string, len(c.docKeywords))
+	for docID, kw := range c.docKeywords {
+		keywordsToProcess[docID] = kw
+	}
+
+	// Clear the main map; failed items will be added back.
+	c.docKeywords = make(map[string][]string)
+	c.docKeywordsMutex.Unlock()
+
+	maxRetries := 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if len(keywordsToProcess) == 0 {
+			log.Println("No keywords to process in current attempt.")
+			break
+		}
+
+		log.Printf("Attempt %d of %d: Starting to finalize keywords for %d documents...", attempt+1, maxRetries+1, len(keywordsToProcess))
+		successfulUpdatesThisAttempt := 0
+		failedKeywordsThisAttempt := make(map[string][]string)
+
+		for docID, keywords := range keywordsToProcess {
+			// Assuming setDocumentKeywords ensures no empty keyword slices are stored if that means "delete".
+			// If keywords is empty here, updateDocumentKeywords will handle it (currently merges with existing).
+			log.Printf("Attempt %d: Finalizing keywords for document %s: %v", attempt+1, docID, keywords)
+			err := c.updateDocumentKeywords(docID, keywords)
+			if err != nil {
+				log.Printf("Attempt %d: Error finalizing keywords for document %s: %v. Will retry if attempts remain.", attempt+1, docID, err)
+				failedKeywordsThisAttempt[docID] = keywords
+			} else {
+				successfulUpdatesThisAttempt++
+				log.Printf("Attempt %d: Successfully finalized keywords for document %s.", attempt+1, docID)
+			}
+		}
+
+		log.Printf("Attempt %d finished. Successful: %d, Failed: %d.", attempt+1, successfulUpdatesThisAttempt, len(failedKeywordsThisAttempt))
+
+		if len(failedKeywordsThisAttempt) == 0 {
+			log.Println("All keywords finalized successfully in this attempt.")
+			break // All done
+		}
+
+		keywordsToProcess = failedKeywordsThisAttempt // Prepare for next retry
+
+		if attempt < maxRetries {
+			log.Printf("Retrying %d failed keyword updates...", len(keywordsToProcess))
+			// Optional: Add a small delay before retrying
+			// time.Sleep(time.Second * time.Duration(attempt+1))
+		} else {
+			log.Printf("Max retries reached. %d keyword updates still failed.", len(keywordsToProcess))
+			// Re-queue the remaining failed keywords
+			for docID, keywords := range keywordsToProcess {
+				c.setKeywordsCache(docID, keywords)
+			}
 		}
 	}
-}
-
-// AddKeywordJob submits a job to update keywords for a document.
-// This function will block if the job queue is full.
-func (c *Client) AddKeywordJob(documentID string, keywords []string) error {
-	if c.keywordChannels == nil || c.keywordChannels.Jobs == nil {
-		return fmt.Errorf("keyword processor not initialized. Call InitKeywordProcessor first")
-	}
-	job := Job{
-		DocumentID: documentID,
-		Keywords:   keywords,
-	}
-	c.keywordChannels.Jobs <- job
-	return nil
-}
-
-// CloseKeywordWorker gracefully shuts down the keyword processing workers.
-func (c *Client) CloseKeywordWorker() {
-	if c.keywordChannels != nil && c.keywordChannels.Jobs != nil {
-		close(c.keywordChannels.Jobs)
-	}
-	c.keywordWg.Wait()
-	log.Println("Keyword processor shut down.")
 }
 
 // GetDocumentSegments retrieves all segments for a document with pagination support
@@ -165,16 +219,16 @@ func (c *Client) mergeKeywords(existing, new []string) []string {
 }
 
 // updateDocumentKeywords updates keywords for all segments of a document
-func (c *Client) updateDocumentKeywords(job *Job) error {
+func (c *Client) updateDocumentKeywords(docId string, keywords []string) error {
 	ctx := context.Background()
-	segments, err := c.fetchDocumentSegments(ctx, job.DocumentID, 1, 100) // Start from page 1
+	segments, err := c.fetchDocumentSegments(ctx, docId, 1, 100) // Start from page 1
 	if err != nil {
 		return fmt.Errorf("failed to get segments: %w", err)
 	}
 
 	for _, segment := range segments {
 		// Merge existing and new keywords
-		mergedKeywords := c.mergeKeywords(segment.Keywords, job.Keywords)
+		mergedKeywords := c.mergeKeywords(segment.Keywords, keywords)
 
 		// Only update if keywords have actually changed to avoid unnecessary API calls.
 		if c.keywordsHaveChanged(segment.Keywords, mergedKeywords) {
@@ -185,7 +239,7 @@ func (c *Client) updateDocumentKeywords(job *Job) error {
 				Enabled:               segment.Enabled,
 				RegenerateChildChunks: false, // Assuming this is the desired default
 			}
-			if err := c.updateSegmentKeywords(ctx, job.DocumentID, segment.ID, segmentReq); err != nil {
+			if err := c.updateSegmentKeywords(ctx, docId, segment.ID, segmentReq); err != nil {
 				return fmt.Errorf("failed to update keywords for segment %s: %w", segment.ID, err)
 			}
 		}
@@ -226,13 +280,13 @@ func (c *Client) keywordsHaveChanged(currentKeywords, newKeywords []string) bool
 }
 
 // UpdateSegmentKeywords updates a document segment's child chunk with new content.
-func (c *Client) updateSegmentKeywords(ctx context.Context, documentID, segmentID string, segment SegmentReq) error {
+func (c *Client) updateSegmentKeywords(ctx context.Context, docID, segmentID string, segment SegmentReq) error {
 	// Validate input parameters
-	if documentID == "" || segmentID == "" {
+	if docID == "" || segmentID == "" {
 		return fmt.Errorf("documentID and segmentID must not be empty")
 	}
 
-	url := fmt.Sprintf("%s/documents/%s/segments/%s", c.baseURL, documentID, segmentID)
+	url := fmt.Sprintf("%s/documents/%s/segments/%s", c.baseURL, docID, segmentID)
 
 	// Define the full request body structure
 	type segmentRequest struct {

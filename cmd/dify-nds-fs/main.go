@@ -39,24 +39,21 @@ func main() {
 	batchPool = batchpool.NewBatchPool(
 		cfg.Concurrency.BatchPoolSize,
 		cfg.Concurrency.QueueSize,
-		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, batchpool.Operation, error) {
-			client, ok := difyClients[key]
-			if !ok {
-				errMsg := fmt.Sprintf("dify client not found for key %s in statusChecker", key)
-				log.Println(errMsg)
-				return "", op, fmt.Errorf(errMsg) // Return original op and an error
+		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (int, string, batchpool.Operation, error) {
+			if c, ok := difyClients[key]; !ok {
+				err := fmt.Errorf("dify client not found for key %s in statusChecker", key)
+				log.Println(err.Error())
+				return -1, "", op, err
+			} else {
+				return c.CheckBatchStatus(ctx, key, id, title, batch, "html", op, cfg.Concurrency.IndexingTimeout, cfg.Concurrency.DeleteTimeoutContent)
 			}
-			return client.CheckBatchStatus(
-				ctx,
-				key,
-				id,
-				title,
-				batch,
-				"file", // source
-				op,
-				cfg.Concurrency.IndexingTimeout,
-				cfg.Concurrency.DeleteTimeoutContent,
-			)
+		},
+		func(key, id string) error {
+			if c, ok := difyClients[key]; !ok {
+				return fmt.Errorf("dify client not found for key %s in updateKeywords", key)
+			} else {
+				return c.UpdateKeywords(id)
+			}
 		},
 		cfg.Concurrency,
 	)
@@ -66,6 +63,12 @@ func main() {
 
 	// Close the batch pool gracefully
 	batchPool.Close()
+
+	// Close all Dify clients gracefully
+	for key, client := range difyClients {
+		log.Printf("Closing Dify client for key: %s", key)
+		client.Close()
+	}
 
 	log.Println("Processing complete.")
 }
@@ -83,7 +86,7 @@ func runProcessingLoop() {
 		if datasetID == "" {
 			log.Fatalf("dataset_id is missing for directory key: %s", cfgPath.Name)
 		}
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg, false)
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg, true)
 		if err != nil {
 			log.Fatalf("failed to create Dify client for directory key %s (dataset %s): %v", cfgPath.Name, datasetID, err)
 		}

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 
+	"golang.org/x/net/html"
+
 	"github.com/PuerkitoBio/goquery"
 )
 
@@ -21,51 +23,56 @@ type Link struct {
 }
 
 func ExtractKeywords(doc *goquery.Document, keywordsBlocks []string) []string {
-	// 输入验证
 	if doc == nil || len(keywordsBlocks) == 0 {
 		return []string{}
 	}
 
-	// 创建允许标签的集合
-	allowedTags := make(map[string]bool)
-	for _, tag := range keywordsBlocks {
-		allowedTags[strings.ToLower(tag)] = true
+	// targetHeadingTexts stores lowercased heading texts (e.g., "Introduction")
+	// from which to extract keywords.
+	targetHeadingTexts := make(map[string]bool)
+	for _, headingText := range keywordsBlocks {
+		targetHeadingTexts[strings.ToLower(headingText)] = true
 	}
 
 	var keywords []string
 
-	// 遍历所有元素节点
-	doc.Find("*").Each(func(i int, s *goquery.Selection) {
-		// 获取当前标签名
-		tagName := strings.ToLower(s.Nodes[0].Data)
+	doc.Find("h1, h2, h3, h4, h5, h6").Each(func(i int, s *goquery.Selection) {
+		currentHeadingText := strings.ToLower(strings.TrimSpace(s.Text()))
 
-		// 如果是script或style标签，跳过处理
-		if tagName == "script" || tagName == "style" {
-			return
-		}
+		if targetHeadingTexts[currentHeadingText] {
+			var blockContent strings.Builder
+			s.NextAll().EachWithBreak(func(j int, siblingNodeSel *goquery.Selection) bool {
+				node := siblingNodeSel.Get(0)
+				if node != nil && node.Type == html.ElementNode {
+					nodeName := strings.ToLower(node.Data)
+					if len(nodeName) == 2 && nodeName[0] == 'h' && (nodeName[1] >= '1' && nodeName[1] <= '6') {
+						// It's a subsequent heading, so stop collecting content for the current block.
+						return false // Break the EachWithBreak loop.
+					}
+				}
 
-		// 如果当前标签在允许的标签列表中
-		if allowedTags[tagName] {
-			// 获取文本内容并提取关键词
-			text := s.Text()
-			words := splitWords(text)
+				blockContent.WriteString(siblingNodeSel.Text())
+				blockContent.WriteString(" ") // Add a space to separate text from different elements.
+				return true                   // Continue to the next sibling.
+			})
+
+			words := SplitWords(blockContent.String())
 			keywords = append(keywords, words...)
 		}
 	})
 
-	return deduplicate(keywords)
+	return RemoveDuplicates(keywords)
 }
 
-// splitWords splits text into individual words
-func splitWords(text string) []string {
-	// Split on non-alphanumeric characters and convert to lowercase
+// SplitWords splits text into individual words
+func SplitWords(text string) []string {
 	words := strings.FieldsFunc(text, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 
 	var cleanedWords []string
 	for _, word := range words {
-		cleaned := strings.ToLower(strings.TrimSpace(word))
+		cleaned := strings.TrimSpace(word)
 		if cleaned != "" {
 			cleanedWords = append(cleanedWords, cleaned)
 		}
@@ -74,8 +81,8 @@ func splitWords(text string) []string {
 	return cleanedWords
 }
 
-// deduplicate removes duplicate keywords
-func deduplicate(strs []string) []string {
+// RemoveDuplicates removes duplicate strings from a slice.
+func RemoveDuplicates(strs []string) []string {
 	seen := make(map[string]bool)
 	var result []string
 
@@ -89,11 +96,11 @@ func deduplicate(strs []string) []string {
 	return result
 }
 
-// combineContentWithReferences takes the original HTML content and the extracted links.
-// It reads the content of each referenced local file within this function.
+// combineContentWithReferences takes original HTML, reads content of local file links,
+// and combines them into a single markdown string.
 func combineContentWithReferences(originalHTMLContent []byte, links []Link, unsupportedBlocks []string) (string, error) {
 	var sb strings.Builder
-	sb.Write(originalHTMLContent) // Start with the original HTML content
+	sb.Write(originalHTMLContent)
 
 	sb.WriteString("\n\n\n")
 	sb.WriteString("<h1>Combined Local References Content:</h1>\n")
@@ -109,9 +116,8 @@ func combineContentWithReferences(originalHTMLContent []byte, links []Link, unsu
 	for _, link := range links {
 		linkedFileContent, err := os.ReadFile(link.URL) // link.URL is already an absolute path
 		if err != nil {
-			// Log the error but continue processing other links.
-			fmt.Printf("Warning: Failed to read content for linked file '%s': %v. Skipping content inclusion for this link.\n", link.URL, err)
-			continue // Skip this link if its content cannot be read
+			fmt.Printf("Warning: Failed to read content for linked file '%s': %v. Skipping its inclusion.\n", link.URL, err)
+			continue
 		}
 
 		// Normalize whitespace for linked file content
@@ -123,23 +129,22 @@ func combineContentWithReferences(originalHTMLContent []byte, links []Link, unsu
 			doc, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(linkedFileContent))
 			if parseErr != nil {
 				fmt.Printf("Warning: Failed to parse HTML for linked file '%s': %v. Appending raw content.\n", link.URL, parseErr)
-				// Fallback to appending raw content if parsing fails
 			} else {
 				removeUnsupportedBlocks(doc, unsupportedBlocks) // Use the original slice for the helper
 				var buf bytes.Buffer
 				if htmlErr := goquery.Render(&buf, doc.Selection); htmlErr != nil {
 					fmt.Printf("Warning: Failed to render modified HTML for linked file '%s': %v. Appending raw content.\n", link.URL, htmlErr)
 				} else {
-					linkedFileContent = buf.Bytes() // Use the modified content
+					linkedFileContent = buf.Bytes()
 				}
 			}
 		}
 
 		sb.WriteString(fmt.Sprintf("<h2><a href=\"%s\">%s</a></h2>\n", link.URL, link.Title))
-		sb.WriteString("<pre><code>\n") // Use <pre> and <code> for code-like content
-		sb.Write(linkedFileContent)     // Append the actual content of the linked file
+		sb.WriteString("<pre><code>\n")
+		sb.Write(linkedFileContent)
 		sb.WriteString("\n</code></pre>\n")
-		sb.WriteString("<hr/>\n") // Separator for clarity
+		sb.WriteString("<hr/>\n") // Add a separator for clarity between combined files.
 	}
 
 	content, err := ConvertContent2Markdown(sb.String(), "text/html", "", ConversionMethodCommon)
@@ -150,16 +155,18 @@ func combineContentWithReferences(originalHTMLContent []byte, links []Link, unsu
 	}
 }
 
-// AppendHtmlRef processes an HTML document, extracts and normalizes unique local file references (URLs).
-// It performs validation and deduplication but does NOT read the content of linked files into Link struct.
+// AppendHtmlRef processes an HTML document: extracts local file references, normalizes them,
+// combines their content with the original, and converts to markdown.
+// It performs validation and deduplication and does NOT read linked file content into the Link struct directly,
+// that happens in combineContentWithReferences.
 func AppendHtmlRef(doc *goquery.Document, unsupportedFilters []string, unsupportedBlocks []string) (string, error) {
 
 	// Apply block removal to the original document itself
 	removeUnsupportedBlocks(doc, unsupportedBlocks)
 
 	var links []Link
-	seenURLs := make(map[string]struct{}) // Use a map as a set for deduplication
-	baseDir := ""
+	seenURLs := make(map[string]struct{})
+	baseDir := "" // Base directory for resolving relative paths, derived from doc.Url.
 	if doc.Url != nil {
 		baseDir = filepath.Dir(doc.Url.Path)
 	}
@@ -173,41 +180,37 @@ func AppendHtmlRef(doc *goquery.Document, unsupportedFilters []string, unsupport
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
 		href, exists := s.Attr("href")
 		if !exists || href == "" {
-			// If no href, we might still want to process its text as plain text
-			// No change needed for this specific `<a>` tag as it's not a valid link for extraction.
-			return // Skip if no href attribute or it's empty
+			return
 		}
 
 		absoluteLocalPath, isValidLocalRef := getAbsoluteLocalPath(href, baseDir)
 		if !isValidLocalRef {
-			// If not a valid local reference, we should remove the link and keep the text.
-			s.ReplaceWithHtml(s.Text()) // Replace the <a> tag with its text content
-			return                      // Skip if not a valid local reference
+			// Not a valid local reference (e.g., external URL, mailto), replace <a> tag with its text.
+			s.ReplaceWithHtml(s.Text())
+			return
 		}
 
 		if _, found := seenURLs[absoluteLocalPath]; found {
-			// If already seen, remove the link and keep the text.
-			s.ReplaceWithHtml(s.Text()) // Replace the <a> tag with its text content
-			return                      // Skip if already seen (deduplication)
+			// Already processed this link, replace <a> tag with its text to avoid duplication.
+			s.ReplaceWithHtml(s.Text())
+			return
 		}
 
 		// Check if the file exists and is accessible using os.Stat
 		if _, err := os.Stat(absoluteLocalPath); err != nil {
-			// File doesn't exist or inaccessible, remove the link and keep the text.
-			s.ReplaceWithHtml(s.Text()) // Replace the <a> tag with its text content
-			return                      // File doesn't exist or inaccessible, skip
+			// File doesn't exist or is inaccessible, replace <a> tag with its text.
+			s.ReplaceWithHtml(s.Text())
+			return
 		}
 
 		// Check if the path contains any unsupported filter
 		if containsUnsupportedFilter(absoluteLocalPath, unsupportedFilterSet) {
-			// Contains an unsupported filter, remove the link and keep the text.
-			s.ReplaceWithHtml(s.Text()) // Replace the <a> tag with its text content
-			return                      // Contains an unsupported filter, skip
+			// Path matches an unsupported filter, replace <a> tag with its text.
+			s.ReplaceWithHtml(s.Text())
+			return
 		}
 
-		// Extract the link title
 		title := extractLinkTitle(s, absoluteLocalPath)
-
 		links = append(links, Link{
 			URL:   absoluteLocalPath,
 			Title: title,
@@ -215,7 +218,7 @@ func AppendHtmlRef(doc *goquery.Document, unsupportedFilters []string, unsupport
 		seenURLs[absoluteLocalPath] = struct{}{}
 
 		// After extracting the link, convert it to plain text in the original HTML
-		s.ReplaceWithHtml(s.Text()) // Replace the <a> tag with its text content
+		s.ReplaceWithHtml(s.Text())
 	})
 
 	// Render the modified original HTML content before passing it to combineContentWithReferences
@@ -227,8 +230,7 @@ func AppendHtmlRef(doc *goquery.Document, unsupportedFilters []string, unsupport
 	return combineContentWithReferences(modifiedOriginalHTML.Bytes(), links, unsupportedBlocks)
 }
 
-// Helper function: extracts the link title
-func extractLinkTitle(s *goquery.Selection, fallbackPath string) string {
+func extractLinkTitle(s *goquery.Selection, fallbackPath string) string { // extracts the link title
 	title := strings.TrimSpace(s.Text())
 	if title == "" {
 		img := s.Find("img").First()
@@ -246,8 +248,7 @@ func extractLinkTitle(s *goquery.Selection, fallbackPath string) string {
 	return title
 }
 
-// Helper function: checks if a path contains any unsupported filter
-func containsUnsupportedFilter(path string, filterSet map[string]struct{}) bool {
+func containsUnsupportedFilter(path string, filterSet map[string]struct{}) bool { // checks if a path contains any unsupported filter
 	for filter := range filterSet {
 		if strings.Contains(path, filter) {
 			return true
@@ -261,11 +262,11 @@ func containsUnsupportedFilter(path string, filterSet map[string]struct{}) bool 
 func getAbsoluteLocalPath(href string, baseDir string) (string, bool) {
 	u, err := url.Parse(href)
 	if err != nil {
-		return "", false // Invalid URL format
+		return "", false
 	}
 
 	if u.IsAbs() && u.Scheme != "" && u.Scheme != "file" {
-		return "", false // External URL (http, https, ftp, etc.)
+		return "", false // It's an absolute URL with a scheme other than "file" (e.g., http, mailto)
 	}
 
 	var resolvedPath string
@@ -280,40 +281,36 @@ func getAbsoluteLocalPath(href string, baseDir string) (string, bool) {
 	cleanPath := filepath.Clean(resolvedPath)
 
 	if !filepath.IsAbs(cleanPath) {
-		return "", false // Path did not resolve to a clean absolute path
+		return "", false
 	}
 
 	return cleanPath, true
 }
 
-// removeUnsupportedBlocks removes heading and content blocks from a goquery document
-// based on a list of unsupported block titles.
+// removeUnsupportedBlocks removes specified heading and content blocks from a goquery document.
 func removeUnsupportedBlocks(doc *goquery.Document, unsupportedBlocks []string) {
 	unsupportedBlockSet := make(map[string]struct{})
 	if len(unsupportedBlocks) == 0 {
-		return // No unsupported blocks to remove
+		return
 	}
 	for _, blockTitle := range unsupportedBlocks {
 		unsupportedBlockSet[blockTitle] = struct{}{}
 	}
 
-	// Iterate over all heading elements (h1-h6)
 	doc.Find("h1, h2, h3, h4, h5, h6").Each(func(i int, s *goquery.Selection) {
 		headingText := strings.TrimSpace(s.Text())
 		if _, found := unsupportedBlockSet[headingText]; found {
 			// Get all siblings *after* the current heading
 			nextSiblings := s.NextAll()
 
-			// Remove the heading itself first
 			s.Remove()
 
-			// Iterate through the collected next siblings and remove them
-			// until another heading is encountered.
+			// Iterate through the collected next siblings and remove them until another heading is encountered.
 			for _, siblingNode := range nextSiblings.Nodes {
 				currentSelection := goquery.NewDocumentFromNode(siblingNode)
 
 				isHeading := false
-				if siblingNode.Type == 1 { // ElementNode
+				if siblingNode.Type == html.ElementNode {
 					tagName := strings.ToLower(siblingNode.Data)
 					if len(tagName) == 2 && strings.HasPrefix(tagName, "h") && tagName[1] >= '1' && tagName[1] <= '6' {
 						isHeading = true
@@ -321,9 +318,9 @@ func removeUnsupportedBlocks(doc *goquery.Document, unsupportedBlocks []string) 
 				}
 
 				if isHeading {
-					break // Stop if we encounter another heading
+					break
 				}
-				currentSelection.Remove() // Remove the content block
+				currentSelection.Remove()
 			}
 		}
 	})
@@ -332,26 +329,22 @@ func removeUnsupportedBlocks(doc *goquery.Document, unsupportedBlocks []string) 
 // normalizeHTMLWhitespace removes multiple spaces, tabs, and empty lines from HTML content.
 // It tries to be careful not to affect content within <pre> or <code> tags.
 func normalizeHTMLWhitespace(htmlContent []byte) []byte {
-	// Convert to string for regex operations
 	contentStr := string(htmlContent)
 
-	// Remove extra spaces and tabs
-	// This regex targets one or more whitespace characters (space, tab, newline, carriage return)
-	// that are NOT within <pre> or <code> tags.
-	// It's a simplified approach and might need refinement for complex cases.
+	// Regex to find <pre>/<code> blocks or sequences of whitespace.
+	// Preserves content within <pre>/<code>, replaces other multiple whitespace with a single space.
 	re := regexp.MustCompile(`(?s)(?U)(?P<pre_code><(?:pre|code)>.*<\/(?:pre|code)>)|[\t ]+`)
 	contentStr = re.ReplaceAllStringFunc(contentStr, func(match string) string {
 		if strings.HasPrefix(match, "<pre>") || strings.HasPrefix(match, "<code>") {
-			return match // Don't modify content inside <pre> or <code> tags
+			return match
 		}
-		if strings.TrimSpace(match) == "" { // If it's just whitespace
-			return " " // Replace with a single space
+		if strings.TrimSpace(match) == "" {
+			return " "
 		}
-		return match // Keep other matches as is
+		return match
 	})
 
-	// Remove empty lines (lines containing only whitespace)
-	// This will remove lines that are entirely empty or contain only spaces/tabs.
+	// Remove empty lines (lines containing only whitespace, or now just a single space from previous step).
 	reEmptyLines := regexp.MustCompile(`(?m)^\s*\n`)
 	contentStr = reEmptyLines.ReplaceAllString(contentStr, "")
 
@@ -369,9 +362,9 @@ func normalizeHTMLWhitespace(htmlContent []byte) []byte {
 		}
 
 		if inPreCodeBlock {
-			cleanedLines = append(cleanedLines, line) // Keep pre/code lines as they are
+			cleanedLines = append(cleanedLines, line)
 		} else if trimmedLine != "" {
-			cleanedLines = append(cleanedLines, trimmedLine) // Add non-empty trimmed lines
+			cleanedLines = append(cleanedLines, trimmedLine)
 		}
 	}
 	contentStr = strings.Join(cleanedLines, "\n")

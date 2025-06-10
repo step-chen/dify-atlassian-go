@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -15,6 +13,9 @@ import (
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 	AI "github.com/step-chen/dify-atlassian-go/internal/process-ai"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
+
+	"context"
+	"os"
 )
 
 // processDirectory processes all files in a given directory
@@ -199,7 +200,7 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 	}
 
 	// Extract keywords from parsed document
-	keywords := utils.ExtractKeywords(doc, cfgDir.Content.KeywordsBlocks)
+	operation.Keywords = utils.ExtractKeywords(doc, cfgDir.Content.KeywordsBlocks)
 
 	// Process HTML references
 	htmlContent, err := utils.AppendHtmlRef(doc, cfgDir.ExcludedFilters, cfgDir.Content.ExcludedBlocks)
@@ -212,9 +213,13 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 		return nil, fmt.Errorf("AI processing failed for file %s: %w", fp, err)
 	}
 
+	// Extract keywords from the first markdown title in the processed content
+	titleKeywords := utils.ExtractMarkdownTitleKeywords(processedContent)
+	operation.Keywords = append(operation.Keywords, titleKeywords...)
+	operation.Keywords = utils.RemoveDuplicates(operation.Keywords)
+
 	j := Job{
 		Type:         operation.Type,
-		Keywords:     keywords,
 		DocumentID:   operation.DifyID,
 		RootDir:      cfgDir.SourcePath,
 		RelativePath: relativePath,
@@ -266,7 +271,7 @@ func createDocument(j *Job) error {
 		DocForm:           cfg.Dify.RagSetting.DocForm,
 	}
 
-	resp, err := j.Client.CreateDocumentByText(&docRequest)
+	resp, err := j.Client.CreateDocumentByText(&docRequest, j.Op.Keywords)
 
 	if err != nil {
 		log.Printf("failed to create Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -282,7 +287,7 @@ func createDocument(j *Job) error {
 		IDToAdd:    j.RelativePath,
 		URL:        j.RelativePath,
 		SourceType: "directory",
-		Type:       "file",
+		Type:       "html",
 		When:       j.Op.LastModifiedDate,
 		//When:       time.Now().Format(time.RFC3339),
 		Xxh3: j.Client.GetHashByDifyIDFromRecord(resp.Document.ID),
@@ -316,7 +321,7 @@ func updateDocument(j *Job) error {
 		Text: string(j.Content),
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest)
+	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, j.Op.Keywords)
 
 	if err != nil {
 		log.Printf("failed to update Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -329,7 +334,7 @@ func updateDocument(j *Job) error {
 	params := dify.DocumentMetadataRecord{
 		URL:        j.RelativePath,
 		SourceType: "directory",
-		Type:       "file",
+		Type:       "html",
 		When:       time.Now().Format(time.RFC3339),
 		Xxh3:       j.Client.GetHashByDifyIDFromRecord(j.DocumentID),
 	}

@@ -186,7 +186,7 @@ func createDocument(j *Job) error {
 		DocForm:           cfg.Dify.RagSetting.DocForm,
 	}
 
-	resp, err := j.Client.CreateDocumentByText(&docRequest)
+	resp, err := j.Client.CreateDocumentByText(&docRequest, nil)
 
 	if err != nil {
 		log.Printf("failed to create Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -236,7 +236,7 @@ func updateDocument(j *Job) error {
 		Text: string(j.Content),
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest)
+	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, j.Op.Keywords)
 
 	if err != nil {
 		log.Printf("failed to update Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)

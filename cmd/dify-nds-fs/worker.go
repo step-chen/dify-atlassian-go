@@ -11,7 +11,6 @@ import (
 // Job represents a directory file processing job
 type Job struct {
 	Type              batchpool.ContentType // Type of job
-	Keywords          []string              // Extracted keywords from content
 	DocumentID        string                // Document ID
 	RootDir           string
 	RelativePath      string       // File path

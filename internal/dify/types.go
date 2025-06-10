@@ -10,6 +10,8 @@ import (
 const (
 	IndexingStatusCompleted = "completed" // Document indexing is complete
 	IndexingStatusIndexing  = "indexing"  // Document is currently being indexed
+	IndexingStatusDeleted   = "deleted"   // Document is currently being indexed
+	IndexingStatusTimeout   = "timeout"   // Document is currently being indexed
 )
 
 // CreateDocumentRequest contains parameters for document creation

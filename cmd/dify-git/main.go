@@ -52,30 +52,17 @@ func main() {
 	batchPool = batchpool.NewBatchPool(
 		cfg.Concurrency.BatchPoolSize,
 		cfg.Concurrency.QueueSize,
-		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (string, batchpool.Operation, error) {
-			// 'key' in the context of Git will be the repoKey (workspace/repo)
-			client, exists := difyClients[key]
-			if !exists {
-				// This shouldn't happen if initialization is correct
-				log.Printf("Error: Dify client not found for repoKey '%s' during status check.", key)
-				return "error", op, fmt.Errorf("dify client not found for repoKey %s", key)
+		func(ctx context.Context, key, id, title, batch string, op batchpool.Operation) (int, string, batchpool.Operation, error) {
+			if c, ok := difyClients[key]; !ok {
+				err := fmt.Errorf("dify client not found for key %s in statusChecker", key)
+				log.Println(err.Error())
+				return -1, "", op, err
+			} else {
+				return c.CheckBatchStatus(ctx, key, id, title, batch, "code", op, cfg.Concurrency.IndexingTimeout, cfg.Concurrency.DeleteTimeoutContent)
 			}
-			// Use the CheckBatchStatus method from the dify client package
-			// Note: CheckBatchStatus might need adjustments if it assumes Confluence-specific logic
-			// For now, assume it works based on DifyID and Batch ID primarily.
-			return client.CheckBatchStatus(
-				ctx,
-				key,   // Pass repoKey as the context key
-				id,    // This should be the internal docID (repoKey:filePath)
-				title, // File path can serve as title
-				batch, // Dify batch ID
-				"git",
-				op, // Operation details
-				cfg.Concurrency.IndexingTimeout,
-				cfg.Concurrency.DeleteTimeoutContent,
-			)
 		},
-		cfg.Concurrency, // Pass the concurrency settings
+		nil,
+		cfg.Concurrency,
 	)
 
 	// --- Initialize Dify Clients ---

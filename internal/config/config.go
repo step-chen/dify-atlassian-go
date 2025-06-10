@@ -120,11 +120,10 @@ type ConcCfg struct {
 // RagSetting: Retrieval-Augmented Generation configuration
 // KeywordWorkerQueueSize: Queue size for the keyword update worker.
 type DifyCfg struct {
-	BaseURL                string            `yaml:"base_url"`                  // Base URL for Dify API
-	APIKey                 string            `yaml:"api_key"`                   // API key for authentication
-	Datasets               map[string]string `yaml:"datasets"`                  // Mapping of space keys to dataset IDs
-	RagSetting             RagSetting        `yaml:"rag_setting"`               // RAG settings
-	KeywordWorkerQueueSize int               `yaml:"keyword_worker_queue_size"` // Queue size for the keyword update worker
+	BaseURL    string            `yaml:"base_url"`    // Base URL for Dify API
+	APIKey     string            `yaml:"api_key"`     // API key for authentication
+	Datasets   map[string]string `yaml:"datasets"`    // Mapping of space keys to dataset IDs
+	RagSetting RagSetting        `yaml:"rag_setting"` // RAG settings
 }
 
 // RagSetting configures Retrieval-Augmented Generation

@@ -20,21 +20,27 @@ import (
 const DefaultKeywordWorkerQueueSize = 100
 
 type Client struct {
-	baseURL         string
-	apiKey          string // Store the decrypted key directly
-	httpClient      *http.Client
-	config          config.DifyCfgProvider            // Use the interface
-	meta            map[string]MetaField              // map[metaName]MetaField
-	metaMapping     map[string]DocumentMetadataRecord // Metadata map[difyID]DocumentMetadataRecord
-	metaMutex       sync.RWMutex                      // Protects metaMapping
-	hashMapping     map[string]string                 // map[xxh3]difyID
-	hashMutex       sync.RWMutex                      // Protects hashMapping
-	keywordChannels *JobChannels                      // Channels for keyword update jobs
-	keywordWg       sync.WaitGroup                    // WaitGroup for keyword workers
+	baseURL          string
+	apiKey           string // Store the decrypted key directly
+	httpClient       *http.Client
+	config           config.DifyCfgProvider            // Use the interface
+	meta             map[string]MetaField              // map[metaName]MetaField
+	metaMapping      map[string]DocumentMetadataRecord // Metadata map[difyID]DocumentMetadataRecord
+	metaMutex        sync.RWMutex                      // Protects metaMapping
+	hashMapping      map[string]string                 // map[xxh3]difyID
+	hashMutex        sync.RWMutex                      // Protects hashMapping
+	docKeywords      map[string][]string               // map[difyID]keywords
+	docKeywordsMutex sync.RWMutex                      // Protects docKeywords
 }
 
 func (c *Client) BaseURL() string {
 	return c.baseURL
+}
+
+// Close performs cleanup for the Client.
+// In Go, there's no direct destructor. This method serves as a cleanup function.
+func (c *Client) Close() {
+	c.finalizeKeywords()
 }
 
 // GetConfig returns the configuration provider associated with the client.
@@ -93,68 +99,55 @@ func NewClient(baseURL, decryptedAPIKey string, datasetID string, cfgProvider co
 		httpClient:  &http.Client{},
 		config:      cfgProvider,                             // Store the interface
 		metaMapping: make(map[string]DocumentMetadataRecord), // Initialize metaMapping
-		// keywordChannels and keywordWg are initialized by InitKeywordProcessor
-	}
-
-	if enableKeywordWorker {
-		difyCfg := cfgProvider.GetDifyConfig()
-		queueSize := difyCfg.KeywordWorkerQueueSize
-
-		if queueSize <= 0 {
-			log.Printf("KeywordWorkerQueueSize from config is %d. Using default positive value: %d.", queueSize, DefaultKeywordWorkerQueueSize)
-			queueSize = DefaultKeywordWorkerQueueSize
-		}
-
-		if err := client.InitKeywordProcessor(queueSize); err != nil {
-			return nil, fmt.Errorf("failed to initialize keyword processor with queue size %d: %w", queueSize, err)
-		}
+		docKeywords: make(map[string][]string),               // Initialize docKeywords
 	}
 
 	return client, nil
 }
 
-func (c *Client) GetIndexingStatus(batch string) (*IndexingStatusResponse, error) {
+func (c *Client) getIndexingStatus(id, batch string) (statusCode int, statusResponse *IndexingStatusResponse, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	statusCode = http.StatusBadRequest
 	url := fmt.Sprintf("%s/documents/%s/indexing-status", c.baseURL, batch)
 
 	req, err := c.newRequest(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return statusCode, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return statusCode, nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusNotFound {
-			statusResponse := IndexingStatusResponse{
+	statusCode = resp.StatusCode
+	if statusCode != http.StatusOK {
+		if statusCode == http.StatusNotFound {
+			statusResponse = &IndexingStatusResponse{
 				Data: []IndexingStatusData{
 					{
-						IndexingStatus: "completed",
+						IndexingStatus: IndexingStatusCompleted,
 					},
 				},
 			}
-			return &statusResponse, nil
+			return statusCode, statusResponse, nil
 		} else {
 			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+			return statusCode, nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
 		}
 	}
 
-	var statusResponse IndexingStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&statusResponse); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err = json.NewDecoder(resp.Body).Decode(&statusResponse); err != nil {
+		return statusCode, nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return &statusResponse, nil
+	return statusCode, statusResponse, err
 }
 
-func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocumentResponse, error) {
+func (c *Client) CreateDocumentByText(req *CreateDocumentRequest, keywords []string) (*CreateDocumentResponse, error) {
 	// Use the config provider interface to get the default process rule
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config) // Pass the stored interface
@@ -185,6 +178,11 @@ func (c *Client) CreateDocumentByText(req *CreateDocumentRequest) (*CreateDocume
 	var response CreateDocumentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Store keywords if the document creation was successful and Document.ID is not empty
+	if response.Document.ID != "" {
+		c.setKeywordsCache(response.Document.ID, keywords)
 	}
 
 	return &response, nil
@@ -287,7 +285,7 @@ func (c *Client) FetchDocuments(page, limit int) (map[string]DocumentMetadataRec
 	return IDToDifyRecord, nil
 }
 
-func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequest) (*CreateDocumentResponse, error) {
+func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequest, keywords []string) (*CreateDocumentResponse, error) {
 	// Use the config provider interface to get the default process rule if needed
 	if req.ProcessRule.Mode == "" {
 		// Only set default if ProcessRule itself is provided but Mode is empty
@@ -325,6 +323,11 @@ func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequ
 		if resp.StatusCode == http.StatusOK {
 			if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 				return nil, fmt.Errorf("failed to decode response: %w", err)
+			}
+
+			// Store keywords if the document creation was successful and Document.ID is not empty
+			if response.Document.ID != "" {
+				c.setKeywordsCache(documentID, keywords)
 			}
 			return &response, nil
 		}

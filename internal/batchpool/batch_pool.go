@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -39,8 +40,11 @@ type Operation struct {
 	LastModifiedDate string
 	MediaType        string // Mime type
 	DifyID           string
+	Keywords         []string
 	StartAt          time.Time
 }
+type UpdateKeywordsFunc func(key, difyID string) (err error)
+type StatusCheckerFunc func(ctx context.Context, key, id, title, batch string, op Operation) (int, string, Operation, error)
 
 type Task struct {
 	key   string
@@ -51,42 +55,47 @@ type Task struct {
 }
 
 type Progress struct {
-	total     atomic.Int32 // Expected total tasks for this space
+	total     atomic.Int32 // Expected total tasks for this key
 	completed atomic.Int32 // Completed tasks for this space
 }
 
 type BatchPool struct {
-	maxWorkers    int
-	statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, Operation, error)
-	taskQueue     chan Task
-	workersWg     sync.WaitGroup // Waits for worker goroutines to finish on Close
-	overallWg     sync.WaitGroup // Waits for all submitted tasks to complete processing
-	stopOnce      sync.Once
-	shutdown      chan struct{}
-	progress      sync.Map // Stores map[string]*Progress for per-space tracking
-	mu            sync.Mutex
-	totalLen      int            // Max length of total count string across all spaces for formatting
-	cfg           config.ConcCfg // Store only the concurrency config
+	maxWorkers     int
+	statusChecker  StatusCheckerFunc
+	updateKeywords UpdateKeywordsFunc
+	taskQueue      chan Task      // Renamed from taskQueue to jobs for consistency if desired, but taskQueue is also clear
+	workersWg      sync.WaitGroup // Waits for worker goroutines to finish on Close
+	overallWg      sync.WaitGroup // Waits for all submitted tasks to complete processing
+	stopOnce       sync.Once
+	shutdown       chan struct{}
+	progress       sync.Map // Stores map[string]*Progress for per-space tracking
+	mu             sync.Mutex
+	totalLen       int            // Max length of total count string across all spaces for formatting
+	cfg            config.ConcCfg // Store only the concurrency config
 
 	// Timeout tracking
 	timeoutContents map[string]map[string]Operation // Stores map[spaceKey]map[contentID]Operation
 	timeoutMutex    sync.Mutex                      // Mutex for protecting timeoutContents
 }
 
-func NewBatchPool(maxWorkers int, queueSize int, statusChecker func(ctx context.Context, key, id, title, batch string, op Operation) (string, Operation, error), concurrencyCfg config.ConcCfg) *BatchPool { // Accept ConcCfg directly
+func NewBatchPool(maxWorkers int, queueSize int, statusChecker StatusCheckerFunc, updateKeywords UpdateKeywordsFunc, concurrencyCfg config.ConcCfg) *BatchPool {
 	if maxWorkers <= 0 {
 		maxWorkers = 1
 	}
 	if queueSize < 0 {
 		queueSize = 0
 	}
+	if statusChecker == nil {
+		log.Fatal("batchpool: statusChecker cannot be nil")
+	}
 
 	bp := &BatchPool{
-		maxWorkers:    maxWorkers,
-		statusChecker: statusChecker,
-		taskQueue:     make(chan Task, queueSize),
-		shutdown:      make(chan struct{}),
-		cfg:           concurrencyCfg, // Store concurrency config
+		maxWorkers:     maxWorkers,
+		statusChecker:  statusChecker,
+		updateKeywords: updateKeywords,
+		taskQueue:      make(chan Task, queueSize),
+		shutdown:       make(chan struct{}),
+		cfg:            concurrencyCfg, // Store concurrency config
 		// progress is initialized implicitly by sync.Map
 		timeoutContents: make(map[string]map[string]Operation),
 	}
@@ -166,7 +175,7 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	ticker := time.NewTicker(10 * time.Second) // Keep polling interval
 	defer ticker.Stop()
 
-	logPrefix := fmt.Sprintf("Space: %s, DifyID: %s, Title: %s, Batch: %s",
+	logPrefix := fmt.Sprintf("Key: %s, DifyID: %s, Title: %s, Batch: %s",
 		task.key, task.op.DifyID, task.title, task.batch)
 
 	taskCompleted := false // Flag to ensure completion logic runs only once
@@ -181,7 +190,7 @@ func (bp *BatchPool) monitorBatch(task Task) {
 	for {
 		select {
 		case <-ticker.C:
-			status, modifiedOp, err := bp.statusChecker(ctx, task.key, task.id, task.title, task.batch, task.op)
+			code, status, modifiedOp, err := bp.statusChecker(ctx, task.key, task.id, task.title, task.batch, task.op)
 			progressStr := bp.ProgressString(task.key) // Get current progress string
 
 			if err != nil {
@@ -195,10 +204,12 @@ func (bp *BatchPool) monitorBatch(task Task) {
 
 				if status == "completed" {
 					bp.MarkTaskComplete(task.key) // Mark first
-					// Add chunks using the document name as content after successful creation
 					taskCompleted = true
-					// Read updated progress for logging
+					// Log success of the main task processing first
 					log.Printf("[SUCCESS] %s - %s", bp.ProgressString(task.key), logPrefix)
+					if bp.updateKeywords != nil && code == http.StatusOK {
+						bp.updateKeywords(task.key, task.op.DifyID)
+					}
 					return
 				} else if status == "deleted" {
 					bp.MarkTaskComplete(task.key) // Mark first

@@ -56,20 +56,16 @@ type OpenAIResponse struct {
 // ProcessTextWithAIConfig processes a given text using the provided AI configuration,
 // adhering to the OpenAI v1 chat completions API.
 func ProcessTextWithAIConfig(aiConfig CFG.AIConfig, inputText string) (string, error) {
-	// Parse the base URL from the AI config
 	baseURL, err := url.Parse(aiConfig.URL)
 	if err != nil {
 		return "", fmt.Errorf("invalid AI config URL: %w", err)
 	}
 
-	// Resolve the chat completions path relative to the base URL
 	// This correctly handles the scheme, host, and existing path segments
 	fullURL := baseURL.ResolveReference(&url.URL{Path: "v1/chat/completions"})
 
-	// Construct messages array for OpenAI chat completions
 	messages := []OpenAIMessage{}
 
-	// Add a system prompt if provided in AI config
 	if aiConfig.Prompt != "" {
 		messages = append(messages, OpenAIMessage{
 			Role:    "system",
@@ -77,13 +73,11 @@ func ProcessTextWithAIConfig(aiConfig CFG.AIConfig, inputText string) (string, e
 		})
 	}
 
-	// Add the user's input text
 	messages = append(messages, OpenAIMessage{
 		Role:    "user",
 		Content: inputText,
 	})
 
-	// Prepare the request payload for OpenAI chat completions
 	requestPayload := OpenAIRequest{
 		Model:    aiConfig.ModelName,
 		Messages: messages,
@@ -97,37 +91,50 @@ func ProcessTextWithAIConfig(aiConfig CFG.AIConfig, inputText string) (string, e
 		return "", fmt.Errorf("failed to marshal OpenAI request payload: %w", err)
 	}
 
-	// Create an HTTP client
 	client := &http.Client{
 		Timeout: 30 * time.Minute, // Increased timeout for potentially longer AI responses
 	}
 
-	// Create a new POST request
 	req, err := http.NewRequest("POST", fullURL.String(), bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return "", fmt.Errorf("failed to create new HTTP request: %w", err)
 	}
 
-	// Set headers
 	req.Header.Set("Content-Type", "application/json")
 	if aiConfig.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+aiConfig.APIKey)
 	}
 
-	// Send the request
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to send request to AI API: %w", err)
+	var resp *http.Response
+	var lastErr error
+
+	// Retry logic: 3 attempts, 5-second interval
+	for attempt := 0; attempt < 3; attempt++ {
+		// Clone the request body for retries as it's an io.Reader
+		if attempt > 0 {
+			// Re-marshal or clone the request body if necessary.
+			// For bytes.NewBuffer, we can create a new one from the original jsonPayload.
+			req.Body = io.NopCloser(bytes.NewBuffer(jsonPayload))
+		}
+
+		resp, err = client.Do(req)
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = fmt.Errorf("attempt %d: failed to send request to AI API: %w", attempt+1, err)
+		time.Sleep(5 * time.Second)
+	}
+	if lastErr != nil {
+		return "", lastErr
 	}
 	defer resp.Body.Close()
 
-	// Read the response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body from AI API: %w", err)
 	}
 
-	// Check for HTTP errors first
 	if resp.StatusCode != http.StatusOK {
 		var apiError struct {
 			Error struct {
@@ -142,7 +149,6 @@ func ProcessTextWithAIConfig(aiConfig CFG.AIConfig, inputText string) (string, e
 		return "", fmt.Errorf("AI API returned non-OK status: %s, body: %s", resp.Status, string(body))
 	}
 
-	// Parse the response
 	var openAIResponse OpenAIResponse
 	if err := json.Unmarshal(body, &openAIResponse); err != nil {
 		return "", fmt.Errorf("failed to unmarshal OpenAI response: %w", err)
@@ -154,7 +160,6 @@ func ProcessTextWithAIConfig(aiConfig CFG.AIConfig, inputText string) (string, e
 			openAIResponse.Error.Message, openAIResponse.Error.Type, openAIResponse.Error.Code)
 	}
 
-	// Extract the generated text from the first choice
 	if len(openAIResponse.Choices) > 0 {
 		content := openAIResponse.Choices[0].Message.Content
 		// Remove <think> sections from content
