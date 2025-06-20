@@ -216,7 +216,7 @@ func createDocument(j *Job) error {
 	}
 
 	// Add document to batch pool for indexing tracking
-	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, docRequest.Name, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, docRequest.Name, resp.Batch, "", j.Op)
 	if err != nil {
 		// Log error if adding to the pool fails (e.g., pool shutdown)
 		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -236,7 +236,7 @@ func updateDocument(j *Job) error {
 		Text: string(j.Content),
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, j.Op.Keywords)
+	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, batchpool.Keywords{})
 
 	if err != nil {
 		log.Printf("failed to update Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -258,7 +258,7 @@ func updateDocument(j *Job) error {
 	}
 
 	// Add document to batch pool for indexing tracking
-	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, updateRequest.Name, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, updateRequest.Name, resp.Batch, "", j.Op)
 	if err != nil {
 		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
 	}

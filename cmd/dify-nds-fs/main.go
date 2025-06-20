@@ -86,7 +86,7 @@ func runProcessingLoop() {
 		if datasetID == "" {
 			log.Fatalf("dataset_id is missing for directory key: %s", cfgPath.Name)
 		}
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg, true)
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, "", cfg, true)
 		if err != nil {
 			log.Fatalf("failed to create Dify client for directory key %s (dataset %s): %v", cfgPath.Name, datasetID, err)
 		}

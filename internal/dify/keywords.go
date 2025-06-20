@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -29,28 +30,26 @@ type SegmentReq struct {
 }
 
 func (c *Client) UpdateKeywords(difyID string) (err error) {
-	keywords := c.getKeywordsCache(difyID)
-	if len(keywords) > 0 {
-		if err = c.updateDocumentKeywords(difyID, keywords); err != nil {
-			return fmt.Errorf("error updating keywords for document %s: %v", difyID, err)
-		}
-		c.removeKeywordsCache(difyID)
+	if err = c.updateDocumentKeywords(difyID); err != nil {
+		return fmt.Errorf("error updating keywords for document %s: %v", difyID, err)
 	}
-
+	c.removeKeywordsCache(difyID)
 	return nil
 }
 
-func (c *Client) setKeywordsCache(difyID string, keywords []string) {
+func (c *Client) setKeywordsCache(difyID string, segKeywords map[int][]string) {
 	c.docKeywordsMutex.Lock()
 	defer c.docKeywordsMutex.Unlock()
-	if c.docKeywords == nil { // Ensure the map is initialized
-		c.docKeywords = make(map[string][]string)
+	if c.docKeywords == nil {
+		c.docKeywords = make(map[string]map[int][]string)
 	}
-	if len(keywords) == 0 {
+
+	if len(segKeywords) == 0 {
 		delete(c.docKeywords, difyID)
-	} else {
-		c.docKeywords[difyID] = keywords
+		return
 	}
+
+	c.docKeywords[difyID] = segKeywords
 }
 
 // removeKeywordsCache removes the keywords for a given Dify document ID from the cache.
@@ -63,17 +62,27 @@ func (c *Client) removeKeywordsCache(difyID string) {
 	delete(c.docKeywords, difyID)
 }
 
-func (c *Client) getKeywordsCache(difyID string) []string {
+func (c *Client) getKeywordsCache(difyID string, segOrderID int) []string {
 	c.docKeywordsMutex.RLock()
 	defer c.docKeywordsMutex.RUnlock()
+
 	if c.docKeywords == nil {
 		return nil
 	}
-	keywords, exists := c.docKeywords[difyID]
-	if !exists {
+
+	segmentMap, docExists := c.docKeywords[difyID]
+	if !docExists || segmentMap == nil {
 		return nil
 	}
-	// Return a copy to prevent external modification of the internal slice
+
+	keywords, segExists := segmentMap[segOrderID]
+	if !segExists {
+		globalKeywords, globalExists := segmentMap[-1]
+		if !globalExists {
+			return nil
+		}
+		keywords = globalKeywords
+	}
 	keywordsCopy := make([]string, len(keywords))
 	copy(keywordsCopy, keywords)
 	return keywordsCopy
@@ -87,14 +96,11 @@ func (c *Client) finalizeKeywords() {
 		return
 	}
 
-	// Create a snapshot of the current keywords to process
-	keywordsToProcess := make(map[string][]string, len(c.docKeywords))
-	for docID, kw := range c.docKeywords {
-		keywordsToProcess[docID] = kw
+	var keywordsToProcess []string
+	for difyID := range c.docKeywords {
+		keywordsToProcess = append(keywordsToProcess, difyID)
 	}
 
-	// Clear the main map; failed items will be added back.
-	c.docKeywords = make(map[string][]string)
 	c.docKeywordsMutex.Unlock()
 
 	maxRetries := 3
@@ -105,42 +111,33 @@ func (c *Client) finalizeKeywords() {
 		}
 
 		log.Printf("Attempt %d of %d: Starting to finalize keywords for %d documents...", attempt+1, maxRetries+1, len(keywordsToProcess))
-		successfulUpdatesThisAttempt := 0
-		failedKeywordsThisAttempt := make(map[string][]string)
+		successfulUpdates := 0
+		failedKeywords := []string{}
 
-		for docID, keywords := range keywordsToProcess {
-			// Assuming setDocumentKeywords ensures no empty keyword slices are stored if that means "delete".
-			// If keywords is empty here, updateDocumentKeywords will handle it (currently merges with existing).
-			log.Printf("Attempt %d: Finalizing keywords for document %s: %v", attempt+1, docID, keywords)
-			err := c.updateDocumentKeywords(docID, keywords)
+		for _, difyID := range keywordsToProcess {
+			err := c.updateDocumentKeywords(difyID)
 			if err != nil {
-				log.Printf("Attempt %d: Error finalizing keywords for document %s: %v. Will retry if attempts remain.", attempt+1, docID, err)
-				failedKeywordsThisAttempt[docID] = keywords
+				log.Printf("Attempt %d: Error finalizing keywords for document %s: %v. Will retry if attempts remain.", attempt+1, difyID, err)
+				failedKeywords = append(failedKeywords, difyID)
 			} else {
-				successfulUpdatesThisAttempt++
-				log.Printf("Attempt %d: Successfully finalized keywords for document %s.", attempt+1, docID)
+				successfulUpdates++
+				c.removeKeywordsCache(difyID)
 			}
 		}
 
-		log.Printf("Attempt %d finished. Successful: %d, Failed: %d.", attempt+1, successfulUpdatesThisAttempt, len(failedKeywordsThisAttempt))
+		log.Printf("Attempt %d finished. Successful: %d, Failed: %d.", attempt+1, successfulUpdates, len(failedKeywords))
 
-		if len(failedKeywordsThisAttempt) == 0 {
+		if len(failedKeywords) == 0 {
 			log.Println("All keywords finalized successfully in this attempt.")
-			break // All done
+			break
 		}
 
-		keywordsToProcess = failedKeywordsThisAttempt // Prepare for next retry
+		keywordsToProcess = failedKeywords
 
 		if attempt < maxRetries {
 			log.Printf("Retrying %d failed keyword updates...", len(keywordsToProcess))
-			// Optional: Add a small delay before retrying
-			// time.Sleep(time.Second * time.Duration(attempt+1))
 		} else {
 			log.Printf("Max retries reached. %d keyword updates still failed.", len(keywordsToProcess))
-			// Re-queue the remaining failed keywords
-			for docID, keywords := range keywordsToProcess {
-				c.setKeywordsCache(docID, keywords)
-			}
 		}
 	}
 }
@@ -201,45 +198,37 @@ func (c *Client) fetchDocumentSegments(ctx context.Context, docID string, page, 
 	return allSegments, nil
 }
 
-// mergeKeywords combines two keyword slices without duplicates
-func (c *Client) mergeKeywords(existing, new []string) []string {
-	keywordMap := make(map[string]struct{})
-	for _, kw := range existing {
-		keywordMap[kw] = struct{}{}
-	}
-	for _, kw := range new {
-		keywordMap[kw] = struct{}{}
-	}
-
-	result := make([]string, 0, len(keywordMap))
-	for kw := range keywordMap {
-		result = append(result, kw)
-	}
-	return result
-}
-
 // updateDocumentKeywords updates keywords for all segments of a document
-func (c *Client) updateDocumentKeywords(docId string, keywords []string) error {
+func (c *Client) updateDocumentKeywords(difyID string) error {
 	ctx := context.Background()
-	segments, err := c.fetchDocumentSegments(ctx, docId, 1, 100) // Start from page 1
+	segments, err := c.fetchDocumentSegments(ctx, difyID, 1, 100) // Start from page 1
 	if err != nil {
 		return fmt.Errorf("failed to get segments: %w", err)
 	}
 
-	for _, segment := range segments {
-		// Merge existing and new keywords
-		mergedKeywords := c.mergeKeywords(segment.Keywords, keywords)
+	nSeg := 0
+	for i, segment := range segments {
+		keywords := c.getKeywordsCache(difyID, i-nSeg)
+		if c.segEofTag != "" {
+			if strings.HasSuffix(segment.Content, c.segEofTag) {
+				segment.Content = strings.TrimSuffix(segment.Content, c.segEofTag)
+			} else {
+				nSeg++
+			}
+		}
 
-		// Only update if keywords have actually changed to avoid unnecessary API calls.
-		if c.keywordsHaveChanged(segment.Keywords, mergedKeywords) {
+		// Merge existing keywords on the segment with the new keywords determined for this segment
+		// mergedKeywords := c.mergeKeywords(segment.Keywords, keywords)
+
+		if c.keywordsHaveChanged(segment.Keywords, keywords) {
 			segmentReq := SegmentReq{
 				Content:               segment.Content,
 				Answer:                segment.Answer, // Preserve existing answer
-				Keywords:              mergedKeywords,
+				Keywords:              keywords,
 				Enabled:               segment.Enabled,
 				RegenerateChildChunks: false, // Assuming this is the desired default
 			}
-			if err := c.updateSegmentKeywords(ctx, docId, segment.ID, segmentReq); err != nil {
+			if err := c.updateSegmentKeywords(ctx, difyID, segment.ID, segmentReq); err != nil {
 				return fmt.Errorf("failed to update keywords for segment %s: %w", segment.ID, err)
 			}
 		}

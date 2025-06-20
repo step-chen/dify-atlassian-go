@@ -131,9 +131,9 @@ type DifyCfg struct {
 // DocForm: Document format
 // ProcessRule: Document processing rules
 type RagSetting struct {
-	IndexingTechnique string       `yaml:"indexing_technique"` // Document indexing technique
-	DocForm           string       `yaml:"doc_form"`           // Document form
-	ProcessRule       *ProcessRule `yaml:"process_rule"`       // Document processing rules
+	IndexingTechnique string      `yaml:"indexing_technique"` // Document indexing technique
+	DocForm           string      `yaml:"doc_form"`           // Document form
+	ProcessRule       ProcessRule `yaml:"process_rule"`       // Document processing rules
 }
 
 // WARNING: This encryption key should be securely stored and rotated periodically

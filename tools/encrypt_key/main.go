@@ -10,7 +10,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("Usage: go run tools/encrypt_key.go <api-key>")
+		log.Fatal("Usage: go run tools/encrypt_key/main.go <api-key>")
 	}
 
 	apiKey := os.Args[1]

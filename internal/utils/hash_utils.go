@@ -3,7 +3,7 @@ package utils
 import (
 	"fmt"
 
-	"github.com/cespare/xxhash"
+	"github.com/cespare/xxhash/v2"
 )
 
 // CalculateXXH3FromBytes computes the XXH3 hash of a byte slice.

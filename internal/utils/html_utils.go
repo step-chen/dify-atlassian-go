@@ -13,6 +13,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/microcosm-cc/bluemonday"
 )
 
 // Link represents a found link with its URL and title.
@@ -20,6 +21,16 @@ import (
 type Link struct {
 	URL   string
 	Title string
+}
+
+func SanitizeHTML(html string) string {
+	p := bluemonday.NewPolicy()
+	p.AllowElements("p", "br")
+	sanitized := p.Sanitize(html)
+	sanitized = strings.ReplaceAll(sanitized, "<p>", "\n")
+	sanitized = strings.ReplaceAll(sanitized, "</p>", "")
+	sanitized = strings.ReplaceAll(sanitized, "<br/>", "\n")
+	return strings.TrimSpace(sanitized)
 }
 
 func ExtractKeywords(doc *goquery.Document, keywordsBlocks []string) []string {

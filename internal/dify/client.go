@@ -29,8 +29,9 @@ type Client struct {
 	metaMutex        sync.RWMutex                      // Protects metaMapping
 	hashMapping      map[string]string                 // map[xxh3]difyID
 	hashMutex        sync.RWMutex                      // Protects hashMapping
-	docKeywords      map[string][]string               // map[difyID]keywords
-	docKeywordsMutex sync.RWMutex                      // Protects docKeywords
+	segEofTag        string
+	docKeywords      map[string]map[int][]string // map[difyID]keywords
+	docKeywordsMutex sync.RWMutex                // Protects docKeywords
 }
 
 func (c *Client) BaseURL() string {
@@ -65,8 +66,8 @@ func (c *Client) IsEqualDifyMeta(ID string, meta DocumentMetadataRecord) bool {
 		return false
 	}
 
-	if record.SourceType != meta.SourceType || record.SpaceKey != meta.SpaceKey ||
-		record.Type != meta.Type || record.Xxh3 != meta.Xxh3 ||
+	if record.SourceType != meta.SourceType || record.Key != meta.Key ||
+		record.Type != meta.Type || record.Xxh3 != meta.Xxh3 || record.Hash != meta.Hash ||
 		utils.BeforeRFC3339Times(record.When, meta.When) {
 		return false
 	}
@@ -82,7 +83,7 @@ func (c *Client) IsEqualDifyMeta(ID string, meta DocumentMetadataRecord) bool {
 }
 
 // NewClient now accepts the DifyClientConfigProvider interface, the decrypted API key, and the specific dataset ID.
-func NewClient(baseURL, decryptedAPIKey string, datasetID string, cfgProvider config.DifyCfgProvider, enableKeywordWorker bool) (*Client, error) { //nolint:revive
+func NewClient(baseURL, decryptedAPIKey, datasetID, segEofTag string, cfgProvider config.DifyCfgProvider, enableKeywordWorker bool) (*Client, error) { //nolint:revive
 	if decryptedAPIKey == "" {
 		return nil, fmt.Errorf("decrypted API key cannot be empty")
 	}
@@ -99,13 +100,14 @@ func NewClient(baseURL, decryptedAPIKey string, datasetID string, cfgProvider co
 		httpClient:  &http.Client{},
 		config:      cfgProvider,                             // Store the interface
 		metaMapping: make(map[string]DocumentMetadataRecord), // Initialize metaMapping
-		docKeywords: make(map[string][]string),               // Initialize docKeywords
+		docKeywords: make(map[string]map[int][]string),       // Initialize docKeywords
+		segEofTag:   segEofTag,
 	}
 
 	return client, nil
 }
 
-func (c *Client) getIndexingStatus(id, batch string) (statusCode int, statusResponse *IndexingStatusResponse, err error) {
+func (c *Client) getIndexingStatus(batch string) (statusCode int, statusResponse *IndexingStatusResponse, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -147,7 +149,7 @@ func (c *Client) getIndexingStatus(id, batch string) (statusCode int, statusResp
 	return statusCode, statusResponse, err
 }
 
-func (c *Client) CreateDocumentByText(req *CreateDocumentRequest, keywords []string) (*CreateDocumentResponse, error) {
+func (c *Client) CreateDocumentByText(req *CreateDocumentRequest, keywords map[int][]string) (*CreateDocumentResponse, error) {
 	// Use the config provider interface to get the default process rule
 	if req.ProcessRule.Mode == "" {
 		req.ProcessRule = DefaultProcessRule(c.config) // Pass the stored interface
@@ -229,22 +231,25 @@ func (c *Client) FetchDocuments(page, limit int) (map[string]DocumentMetadataRec
 		}
 
 		for _, doc := range response.Data {
-			var IDs, whenVal, xxh3Val, source_type, space_key, doc_type, url string
+			var IDs, whenVal, xxh3Val, source_type, key, doc_type, url, hash string
 			for _, meta := range doc.DocMetadata {
-				if meta.Name == "id" {
+				switch meta.Name {
+				case "id":
 					IDs = meta.Value
-				} else if meta.Name == "last_modified_date" {
+				case "last_modified_date":
 					whenVal = meta.Value
-				} else if meta.Name == "xxh3" {
+				case "xxh3":
 					xxh3Val = meta.Value
-				} else if meta.Name == "source_type" {
+				case "source_type":
 					source_type = meta.Value
-				} else if meta.Name == "space_key" {
-					space_key = meta.Value
-				} else if meta.Name == "type" {
+				case "key":
+					key = meta.Value
+				case "type":
 					doc_type = meta.Value
-				} else if meta.Name == "url" {
+				case "url":
 					url = meta.Value
+				case "hash":
+					hash = meta.Value
 				}
 			}
 
@@ -255,9 +260,10 @@ func (c *Client) FetchDocuments(page, limit int) (map[string]DocumentMetadataRec
 					When:       whenVal,
 					Xxh3:       xxh3Val,
 					SourceType: source_type,
-					SpaceKey:   space_key,
+					Key:        key,
 					Type:       doc_type,
 					URL:        url,
+					Hash:       hash,
 				}
 				c.SetHashMapping(xxh3Val, doc.ID)
 
@@ -285,13 +291,8 @@ func (c *Client) FetchDocuments(page, limit int) (map[string]DocumentMetadataRec
 	return IDToDifyRecord, nil
 }
 
-func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequest, keywords []string) (*CreateDocumentResponse, error) {
-	// Use the config provider interface to get the default process rule if needed
+func (c *Client) UpdateDocumentByText(documentID string, req *UpdateDocumentRequest, keywords map[int][]string) (*CreateDocumentResponse, error) {
 	if req.ProcessRule.Mode == "" {
-		// Only set default if ProcessRule itself is provided but Mode is empty
-		// If req.ProcessRule is entirely nil/zero, the API might use its own defaults.
-		// However, the struct definition includes ProcessRule directly, not as a pointer,
-		// so we check the Mode. If Mode is empty, we apply defaults.
 		req.ProcessRule = DefaultProcessRule(c.config) // Pass the stored interface
 	}
 
@@ -471,9 +472,10 @@ func (c *Client) updateDocumentIDs(documentID, source string, originalRecord Doc
 	addMeta("url", originalRecord.URL)
 	addMeta("source_type", source) // Assuming it's always confluence here
 	addMeta("type", originalRecord.Type)
-	addMeta("space_key", originalRecord.SpaceKey)
+	addMeta("key", originalRecord.Key)
 	addMeta("last_modified_date", originalRecord.When)
 	addMeta("xxh3", originalRecord.Xxh3)
+	addMeta("hash", originalRecord.Hash)
 
 	updateReq := UpdateDocumentMetadataRequest{
 		OperationData: []DocumentOperation{

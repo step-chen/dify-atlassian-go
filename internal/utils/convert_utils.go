@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
-	md "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
 )
 
 type ConversionMethod int
@@ -100,27 +103,26 @@ func ConvertFile2Markdown(inputPath, mediaType, separator string, method Convers
 }
 
 func html2Markdown(inputPath, separator string) (string, error) {
-	htmlContent, err := os.ReadFile(inputPath)
-	if err != nil {
+	if htmlContent, err := os.ReadFile(inputPath); err != nil {
 		return "", fmt.Errorf("failed to read HTML file %s: %w", inputPath, err)
+	} else {
+		return html2MarkdownFromContent(string(htmlContent), separator)
 	}
-
-	converter := md.NewConverter("", true, nil)
-	markdown, err := converter.ConvertString(string(htmlContent))
-	if err != nil {
-		return "", fmt.Errorf("failed to convert HTML to Markdown for %s: %w", inputPath, err)
-	}
-
-	return formatContent(markdown, separator), nil
 }
 
 func html2MarkdownFromContent(content, separator string) (string, error) {
-	converter := md.NewConverter("", true, nil)
-	markdown, err := converter.ConvertString(content)
-	if err != nil {
+	conv := converter.NewConverter(
+		converter.WithPlugins(
+			base.NewBasePlugin(),
+			commonmark.NewCommonmarkPlugin(),
+			table.NewTablePlugin(),
+		),
+	)
+	if markdown, err := conv.ConvertString(content); err != nil {
 		return "", fmt.Errorf("failed to convert HTML to Markdown: %w", err)
+	} else {
+		return formatContent(markdown, separator), nil
 	}
-	return formatContent(markdown, separator), nil
 }
 
 // convert2MarkdownByMarkitdown converts a file to markdown using markitdown docker image

@@ -75,7 +75,7 @@ func main() {
 				log.Fatalf("Dify dataset mapping missing or empty for repository: %s", key)
 			}
 
-			client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg, false) // Pass cfg as provider
+			client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, "", cfg, false) // Pass cfg as provider
 			if err != nil {
 				log.Fatalf("Failed to create Dify client for repo %s (dataset %s): %v", key, datasetID, err)
 			}
@@ -247,9 +247,10 @@ func processAllRepositories(jobChannels *JobChannels) {
 					case jobChannels.Jobs <- job:
 						totalJobsCreated++
 						actionName := "UNKNOWN"
-						if action == batchpool.ActionCreate {
+						switch action {
+						case batchpool.ActionCreate:
 							actionName = "CREATE"
-						} else if action == batchpool.ActionUpdate {
+						case batchpool.ActionUpdate:
 							actionName = "UPDATE"
 						}
 						log.Printf("Dispatched %s job for %s", actionName, localRelPath)

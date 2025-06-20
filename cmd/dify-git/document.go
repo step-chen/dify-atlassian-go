@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
@@ -96,7 +97,7 @@ func createDocument(job *Job) error {
 	job.Op.DifyID = newDifyID // Update operation with Dify ID
 	job.Op.StartAt = time.Now()
 	// Add to batch pool for monitoring
-	err = batchPool.Add(context.Background(), job.RepoKey, docID, job.FilePath, resp.Batch, job.Op)
+	err = batchPool.Add(context.Background(), job.RepoKey, docID, job.FilePath, resp.Batch, "", job.Op)
 	if err != nil {
 		log.Printf("Error adding CREATE task to batch pool for %s/%s (DifyID: %s): %v", job.RepoKey, job.FilePath, newDifyID, err)
 		// Consider if the Dify document should be deleted if adding to pool fails.
@@ -144,7 +145,7 @@ func updateDocument(job *Job) error {
 	}
 
 	// Call Dify API
-	resp, err := job.Client.UpdateDocumentByText(job.DocumentID, updateReq, job.Op.Keywords)
+	resp, err := job.Client.UpdateDocumentByText(job.DocumentID, updateReq, batchpool.Keywords{})
 	if err != nil {
 		return fmt.Errorf("failed to update document %s in Dify for %s: %w", job.DocumentID, job.FilePath, err)
 	}
@@ -178,7 +179,7 @@ func updateDocument(job *Job) error {
 	job.Op.DifyID = job.DocumentID // Use existing Dify ID
 	job.Op.StartAt = time.Now()
 	// Add to batch pool for monitoring
-	err = batchPool.Add(context.Background(), job.RepoKey, docID, job.FilePath, resp.Batch, job.Op)
+	err = batchPool.Add(context.Background(), job.RepoKey, docID, job.FilePath, resp.Batch, "", job.Op)
 	if err != nil {
 		log.Printf("Error adding UPDATE task to batch pool for %s/%s (DifyID: %s): %v", job.RepoKey, job.FilePath, job.DocumentID, err)
 	}

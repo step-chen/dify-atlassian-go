@@ -211,3 +211,21 @@ func DownloadFileToTemp(url, apiKey, fileName string) (string, error) {
 
 	return file.Name(), nil
 }
+
+func MatchesFilters(patterns []string, filePath string) (bool, error) {
+	if len(patterns) == 0 {
+		return true, nil
+	}
+
+	baseName := filepath.Base(filePath)
+	for _, pattern := range patterns {
+		matched, err := filepath.Match(pattern, baseName)
+		if err != nil {
+			return false, fmt.Errorf("pattern %q is malformed: %w", pattern, err)
+		}
+		if matched {
+			return true, nil
+		}
+	}
+	return false, nil
+}

@@ -87,17 +87,12 @@ func getDirectoryFiles(cfgDir CFG.DirectoryPath) (map[string]batchpool.Operation
 			return nil
 		}
 
-		// Apply file filters if configured
-		if len(cfgDir.Filter) > 0 {
-			matched := false
-			for _, pattern := range cfgDir.Filter {
-				if matched, _ = filepath.Match(pattern, filepath.Base(path)); matched {
-					break
-				}
-			}
-			if !matched {
-				return nil // Skip files that don't match any filter pattern
-			}
+		// Apply file filters
+		if matched, err := utils.MatchesFilters(cfgDir.Filter, path); err != nil {
+			log.Printf("error matching pattern for file %s: %v", path, err)
+			return err // Stop walking if pattern is malformed
+		} else if !matched {
+			return nil // Skip files that don't match any filter pattern
 		}
 
 		// Check file type using MIMEType
@@ -199,8 +194,8 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 		return nil, fmt.Errorf("failed to parse HTML for file %s: %w", fp, err)
 	}
 
-	// Extract keywords from parsed document
-	operation.Keywords = utils.ExtractKeywords(doc, cfgDir.Content.KeywordsBlocks)
+	var keywords batchpool.Keywords
+	keywords.Add(-1, utils.ExtractKeywords(doc, cfgDir.Content.KeywordsBlocks))
 
 	// Process HTML references
 	htmlContent, err := utils.AppendHtmlRef(doc, cfgDir.ExcludedFilters, cfgDir.Content.ExcludedBlocks)
@@ -213,11 +208,9 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 		return nil, fmt.Errorf("AI processing failed for file %s: %w", fp, err)
 	}
 
-	// Extract keywords from the first markdown title in the processed content
 	title := utils.ExtractMarkdownTitleKeywords(processedContent)
 	if title != "" {
-		operation.Keywords = append(operation.Keywords, title)
-		operation.Keywords = utils.RemoveDuplicates(operation.Keywords)
+		keywords.Add(-1, []string{title})
 	}
 
 	j := Job{
@@ -227,9 +220,9 @@ func preprocessingOperation(cfgDir CFG.DirectoryPath, relativePath string, opera
 		RootDir:      cfgDir.SourcePath,
 		RelativePath: relativePath,
 		Client:       client,
+		Keywords:     keywords,
 		Op:           operation,
 		DirKey:       cfgDir.Name,
-		// Content and PreprocessingFile are set below
 	}
 
 	// Write processed content to output directory if configured
@@ -274,7 +267,7 @@ func createDocument(j *Job) error {
 		DocForm:           cfg.Dify.RagSetting.DocForm,
 	}
 
-	resp, err := j.Client.CreateDocumentByText(&docRequest, j.Op.Keywords)
+	resp, err := j.Client.CreateDocumentByText(&docRequest, j.Keywords)
 
 	if err != nil {
 		log.Printf("failed to create Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -305,7 +298,7 @@ func createDocument(j *Job) error {
 	}
 
 	// Add document to batch pool for indexing tracking
-	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, docRequest.Name, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, docRequest.Name, resp.Batch, "", j.Op)
 	if err != nil {
 		// Log error if adding to the pool fails (e.g., pool shutdown)
 		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -325,7 +318,7 @@ func updateDocument(j *Job) error {
 		Text: string(j.Content),
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, j.Op.Keywords)
+	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, j.Keywords)
 
 	if err != nil {
 		log.Printf("failed to update Dify document for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
@@ -348,7 +341,7 @@ func updateDocument(j *Job) error {
 	}
 
 	// Add document to batch pool for indexing tracking
-	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, updateRequest.Name, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.DirKey, j.RelativePath, updateRequest.Name, resp.Batch, "", j.Op)
 	if err != nil {
 		log.Printf("Error adding task to batch pool for directory %s file %s: %v", j.DirKey, j.RelativePath, err)
 	}

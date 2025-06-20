@@ -54,18 +54,15 @@ type CreateDocumentByFileRequest struct {
 // cfgProvider: Configuration provider to override defaults
 // Returns configured ProcessRule with fallback values
 func DefaultProcessRule(cfgProvider config.DifyCfgProvider) config.ProcessRule {
-	// Use config values if available, otherwise fall back to defaults
 	var processRule config.ProcessRule
 	if cfgProvider != nil {
-		difyCfg := cfgProvider.GetDifyConfig() // Get Dify config via interface
-		if difyCfg.RagSetting.ProcessRule != nil {
-			processRule = *difyCfg.RagSetting.ProcessRule
-		}
+		processRule = cfgProvider.GetDifyConfig().RagSetting.ProcessRule
 	}
 	if processRule.Mode == "" {
 		processRule.Mode = "custom"
 	}
-	if processRule.Rules.PreProcessingRules == nil {
+
+	if len(processRule.Rules.PreProcessingRules) == 0 {
 		processRule.Rules.PreProcessingRules = []config.PreprocessingRules{
 			{
 				ID:      "remove_extra_spaces",
@@ -198,18 +195,18 @@ type DocumentListResponse struct {
 // linking it back to its source (Confluence or Bitbucket).
 // It is used both for storing the metadata state and as parameters for updates.
 type DocumentMetadataRecord struct {
-	Title          string // Document title
-	URL            string // Source URL (Confluence page/attachment or Bitbucket file)
-	SourceType     string // "confluence", "file" or "git"
-	Type           string // Content type ("page", "attachment", or "file")
-	SpaceKey       string // Confluence space key (for Confluence documents)
-	RepositorySlug string // Bitbucket repository slug (for Bitbucket documents)
-	FilePath       string // Bitbucket file path (for Bitbucket documents)
-	IDs            string // Comma-separated list of associated Confluence content IDs (stored state)
-	IDToAdd        string `json:"-"` // Transient field: Confluence ID to add during an update operation. Ignored by JSON marshalling.
-	When           string // Last modified timestamp (RFC3339 format)
-	DifyID         string // The corresponding Dify document ID
-	Xxh3           string // XXH3 hash of the content
+	Title      string // Document title
+	URL        string // Source URL (Confluence page/attachment or Bitbucket file)
+	SourceType string // "confluence", "file" or "git"
+	Type       string // Content type ("page", "attachment" or "file")
+	Key        string // Key
+	FilePath   string // Bitbucket file path (for Bitbucket documents)
+	IDs        string // Comma-separated list of associated Confluence content IDs (stored state)
+	IDToAdd    string // Transient field: Confluence ID to add during an update operation. Ignored by JSON marshalling.
+	When       string // Last modified timestamp (RFC3339 format)
+	DifyID     string // The corresponding Dify document ID
+	Hash       string // Source hash such as contentId in bitbucket
+	Xxh3       string // XXH3 hash of the content
 }
 
 // DocumentMetadata represents a single key-value pair for Dify's metadata API.

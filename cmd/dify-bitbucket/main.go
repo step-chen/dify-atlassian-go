@@ -2,14 +2,14 @@ package main
 
 import (
 	"context"
-	"flag" // Add flag package
+	"flag"
 	"fmt"
 	"log"
 	"sync"
 
 	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
-	confluence_cfg "github.com/step-chen/dify-atlassian-go/internal/config/confluence"
-	"github.com/step-chen/dify-atlassian-go/internal/confluence"
+	"github.com/step-chen/dify-atlassian-go/internal/bitbucket"
+	CFG "github.com/step-chen/dify-atlassian-go/internal/config/bitbucket"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 	"github.com/step-chen/dify-atlassian-go/internal/utils"
 )
@@ -17,7 +17,7 @@ import (
 var (
 	difyClients map[string]*dify.Client
 	batchPool   *batchpool.BatchPool
-	cfg         *confluence_cfg.Config // Use the specific Confluence config type
+	cfg         *CFG.Config // Use the specific Confluence config type
 )
 
 // Application entry point, handles initialization and task processing
@@ -28,7 +28,7 @@ func main() {
 
 	// Load config file using the confluence config loader
 	var err error
-	cfg, err = confluence_cfg.LoadConfig(*configFile) // Use the flag value
+	cfg, err = CFG.LoadConfig(*configFile) // Use the flag value
 	if err != nil {
 		log.Fatalf("Failed to load config from %s: %v", *configFile, err)
 	}
@@ -51,7 +51,13 @@ func main() {
 				return c.CheckBatchStatus(ctx, key, id, title, batch, "confluence", op, cfg.Concurrency.IndexingTimeout, cfg.Concurrency.DeleteTimeoutContent)
 			}
 		},
-		nil,
+		func(key, id string) error {
+			if c, ok := difyClients[key]; !ok {
+				return fmt.Errorf("dify client not found for key %s in updateKeywords", key)
+			} else {
+				return c.UpdateKeywords(id)
+			}
+		},
 		cfg.Concurrency,
 	)
 
@@ -66,30 +72,30 @@ func main() {
 
 // runProcessingLoop initializes clients, workers, and manages the space processing loop with retries.
 func runProcessingLoop() {
-	// Init Dify clients per space
+	// Init Dify clients per repos
 	difyClients = make(map[string]*dify.Client)
-	for _, spaceKey := range cfg.Confluence.SpaceKeys { // Use ConfluenceSettings
-		datasetID, exists := cfg.Dify.Datasets[spaceKey]
+	for key := range cfg.Bitbucket.Keys { // Use BitbucketSettings
+		datasetID, exists := cfg.Dify.Datasets[key]
 		if !exists {
-			log.Fatalf("no dataset mapping configured for space key: %s", spaceKey)
+			log.Fatalf("no dataset mapping configured for repos key: %s", key)
 		}
 		if datasetID == "" {
-			log.Fatalf("dataset_id is missing for space key: %s", spaceKey)
+			log.Fatalf("dataset_id is missing for repos key: %s", key)
 		}
-		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, "", cfg, false)
+		client, err := dify.NewClient(cfg.Dify.BaseURL, cfg.Dify.APIKey, datasetID, cfg.Bitbucket.Keys[key].EOF, cfg, false)
 		if err != nil {
-			log.Fatalf("failed to create Dify client for space %s (dataset %s): %v", spaceKey, datasetID, err)
+			log.Fatalf("failed to create Dify client for repos %s (dataset %s): %v", key, datasetID, err)
 		}
 		if err = client.InitMetadata(); err != nil {
-			log.Fatalf("failed to initialize metadata for space %s: %v", spaceKey, err)
+			log.Fatalf("failed to initialize metadata for repos %s: %v", key, err)
 		}
-		difyClients[spaceKey] = client
+		difyClients[key] = client
 	}
 
 	// Init Confluence client
-	confluenceClient, err := confluence.NewClient(
-		cfg.Confluence.BaseURL,
-		cfg.Confluence.APIKey,
+	bitbucketClient, err := bitbucket.NewClient(
+		cfg.Bitbucket.BaseURL,
+		cfg.Bitbucket.APIKey,
 		cfg.AllowedTypes,
 		cfg.UnsupportedTypes,
 		cfg.Dify.RagSetting.ProcessRule.Rules.Segmentation.Separator,
@@ -116,14 +122,14 @@ func runProcessingLoop() {
 		cfg.Concurrency.IndexingTimeout = (i + 1) * cfg.Concurrency.IndexingTimeout // Increase timeout for each retry
 
 		// Process all spaces
-		for _, spaceKey := range cfg.Confluence.SpaceKeys { // Use ConfluenceSettings
-			c, exists := difyClients[spaceKey]
+		for key, repoInfo := range cfg.Bitbucket.Keys { // Use ConfluenceSettings
+			c, exists := difyClients[key]
 			if !exists {
-				log.Printf("Warning: Dify client not found for space %s during processing run %d. Skipping.", spaceKey, i+1)
+				log.Printf("Warning: Dify client not found for repos %s during processing run %d. Skipping.", key, i+1)
 				continue
 			}
-			if err := processSpace(spaceKey, c, confluenceClient, &jobChannels); err != nil {
-				log.Printf("error processing space %s during run %d: %v", spaceKey, i+1, err)
+			if err := processKey(key, c, bitbucketClient, &repoInfo, &jobChannels); err != nil {
+				log.Printf("error processing repos %s during run %d: %v", key, i+1, err)
 			}
 		}
 

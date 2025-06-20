@@ -129,7 +129,7 @@ func processOperation(contentID string, operation batchpool.Operation, spaceKey 
 			URL:        j.Content.URL,
 			SourceType: "confluence", // Added SourceType
 			Type:       j.Content.Type,
-			SpaceKey:   j.SpaceKey,
+			Key:        j.SpaceKey,
 			IDToAdd:    j.Content.ID,          // Use the transient field to add this ID
 			When:       j.Content.PublishDate, // Renamed from Timestamp
 			Xxh3:       j.Content.Xxh3,        // Renamed from XXH3
@@ -165,6 +165,7 @@ func createDocument(j *Job) error {
 		Text:              j.Content.Content,
 		IndexingTechnique: cfg.Dify.RagSetting.IndexingTechnique,
 		DocForm:           cfg.Dify.RagSetting.DocForm,
+		ProcessRule:       cfg.Dify.RagSetting.ProcessRule,
 	}
 
 	resp, err := j.Client.CreateDocumentByText(&docRequest, nil)
@@ -183,7 +184,7 @@ func createDocument(j *Job) error {
 		URL:        j.Content.URL,
 		SourceType: "confluence", // Added SourceType
 		Type:       j.Content.Type,
-		SpaceKey:   j.SpaceKey,
+		Key:        j.SpaceKey,
 		IDToAdd:    j.Content.ID,          // Use the transient field to add this ID
 		When:       j.Content.PublishDate, // Renamed from Timestamp
 		Xxh3:       j.Content.Xxh3,        // Renamed from XXH3
@@ -198,7 +199,7 @@ func createDocument(j *Job) error {
 
 	// Add document to batch pool for indexing tracking
 	// Add context.Background() as the first argument
-	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, "", j.Op)
 	if err != nil {
 		// Log error if adding to the pool fails (e.g., pool shutdown)
 		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
@@ -213,11 +214,12 @@ func updateDocument(j *Job) error {
 
 	// Update document
 	updateRequest := dify.UpdateDocumentRequest{
-		Name: j.Content.Title,
-		Text: j.Content.Title,
+		Name:        j.Content.Title,
+		Text:        j.Content.Title,
+		ProcessRule: cfg.Dify.RagSetting.ProcessRule,
 	}
 
-	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, j.Op.Keywords)
+	resp, err := j.Client.UpdateDocumentByText(j.DocumentID, &updateRequest, batchpool.Keywords{})
 
 	if err != nil {
 		log.Printf("failed to update Dify document for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
@@ -231,7 +233,7 @@ func updateDocument(j *Job) error {
 		URL:        j.Content.URL,
 		SourceType: "confluence", // Added SourceType
 		Type:       j.Content.Type,
-		SpaceKey:   j.SpaceKey,
+		Key:        j.SpaceKey,
 		IDToAdd:    j.Content.ID,          // Use the transient field to add this ID
 		When:       j.Content.PublishDate, // Renamed from Timestamp
 		Xxh3:       j.Content.Xxh3,        // Renamed from XXH3
@@ -242,7 +244,7 @@ func updateDocument(j *Job) error {
 
 	// Add document to batch pool for indexing tracking
 	// Add context.Background() as the first argument
-	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, j.Op)
+	err = batchPool.Add(context.Background(), j.SpaceKey, j.Content.ID, j.Content.Title, resp.Batch, "", j.Op)
 	if err != nil {
 		log.Printf("Error adding task to batch pool for space %s content %s: %v", j.SpaceKey, j.Content.Title, err)
 	}

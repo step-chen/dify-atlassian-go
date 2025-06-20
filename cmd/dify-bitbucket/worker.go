@@ -5,24 +5,27 @@ import (
 	"sync"
 
 	"github.com/step-chen/dify-atlassian-go/internal/batchpool"
+	"github.com/step-chen/dify-atlassian-go/internal/bitbucket"
+	CFG "github.com/step-chen/dify-atlassian-go/internal/config/bitbucket"
+	"github.com/step-chen/dify-atlassian-go/internal/content_parser"
 	"github.com/step-chen/dify-atlassian-go/internal/dify"
 )
 
-// Job represents a directory file processing job
+// Job defines a task for a worker to process.
 type Job struct {
-	Title             string
-	Type              batchpool.ContentType // Type of job
-	DocumentID        string                // Document ID
-	RootDir           string
-	RelativePath      string             // File path
-	Content           string             // File content
-	Keywords          batchpool.Keywords // Keywords to add
-	Client            *dify.Client       // Dify client
-	Op                batchpool.Operation
-	DirKey            string // Directory key (dir1, dir2)
-	PreprocessingFile string
+	Type            batchpool.ContentType // Type of job
+	BatchPool       *batchpool.BatchPool
+	DocumentID      string             // Document ID
+	Key             string             // Key
+	Content         *bitbucket.Content // Content to be processed (optional)
+	Client          *dify.Client       // Dify client
+	BitbucketClient *bitbucket.Client  // Confluence client (optional)
+	Op              batchpool.Operation
+	Parser          *content_parser.IParser
+	RepoCFG         *CFG.RepoInfo
 }
 
+// JobChannels holds channels for job distribution.
 type JobChannels struct {
 	Jobs chan Job
 }
@@ -32,7 +35,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 	for job := range jobChan {
 		// batchPool.WaitForAvailable() // Removed - BatchPool manages worker availability internally
 		switch job.Type {
-		case batchpool.LocalFile:
+		case batchpool.Page, batchpool.Attachment, batchpool.GitFile:
 			switch job.Op.Action {
 			case batchpool.ActionCreate:
 				if err := createDocument(&job); err != nil {
@@ -40,7 +43,7 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 				}
 			case batchpool.ActionUpdate:
 				if job.DocumentID == "" {
-					log.Printf("Warning: Update action requested but no DocumentID found for file %s. Attempting create.", job.RelativePath)
+					log.Printf("Warning: Update action requested but no DocumentID found for Bitbucket ID %s. Attempting create.", job.Content.ID)
 					if err := createDocument(&job); err != nil {
 						log.Printf("error processing create-during-update content job: %v", err)
 					}
@@ -51,14 +54,14 @@ func worker(jobChan <-chan Job, wg *sync.WaitGroup) {
 				}
 			case batchpool.ActionDelete:
 				if job.DocumentID == "" {
-					log.Printf("Warning: Delete action requested but no DocumentID found for file %s. Skipping deletion.", job.RelativePath)
+					log.Printf("Warning: Delete action requested but no DocumentID found for Bitbucket ID %s. Skipping deletion.", job.Content.ID)
 				} else {
 					if err := deleteDocument(&job); err != nil {
 						log.Printf("error processing delete content job: %v", err)
 					}
 				}
 			default:
-				log.Printf("unknown job action type %d for LocalFile: %s", job.Op.Action, job.RelativePath)
+				log.Printf("unknown job action type %d for Page/Attachment", job.Op.Action)
 			}
 		default:
 			log.Printf("unknown job type: %v", job.Type)

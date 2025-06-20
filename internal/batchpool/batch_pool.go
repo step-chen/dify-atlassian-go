@@ -20,6 +20,7 @@ const (
 	Page ContentType = iota
 	Attachment
 	Code
+	GitFile
 	LocalFile
 )
 
@@ -33,16 +34,68 @@ const (
 	ActionNoAction ActionType = -1 // Represents no action
 )
 
-type Operation struct {
-	Action ActionType  // 0: create, 1: update, 2: delete, -1: no action
-	Type   ContentType // 0: page, 1: attachment
+type Keywords map[int][]string
 
+func (k *Keywords) Add(segOrderID int, keywordsToAdd []string) {
+	if *k == nil {
+		*k = make(Keywords)
+	}
+	if len(keywordsToAdd) == 0 {
+		return
+	}
+
+	currentKeywords := (*k)[segOrderID]
+
+	existingKeywordsMap := make(map[string]struct{})
+	for _, kw := range currentKeywords {
+		existingKeywordsMap[kw] = struct{}{}
+	}
+
+	for _, newKw := range keywordsToAdd {
+		if _, exists := existingKeywordsMap[newKw]; !exists {
+			currentKeywords = append(currentKeywords, newKw)
+			existingKeywordsMap[newKw] = struct{}{} // Add to map to avoid duplicates within keywordsToAdd
+		}
+	}
+
+	(*k)[segOrderID] = currentKeywords
+}
+
+func (k *Keywords) RemoveDuplicates() {
+	if k == nil {
+		return
+	}
+
+	for segOrderID, keywordList := range *k {
+		if len(keywordList) == 0 {
+			continue
+		}
+
+		seen := make(map[string]struct{})
+		uniqueKeywords := make([]string, 0, len(keywordList))
+
+		for _, keyword := range keywordList {
+			if _, exists := seen[keyword]; !exists {
+				seen[keyword] = struct{}{}
+				uniqueKeywords = append(uniqueKeywords, keyword)
+			}
+		}
+
+		(*k)[segOrderID] = uniqueKeywords
+	}
+}
+
+type Operation struct {
+	Action           ActionType  // 0: create, 1: update, 2: delete, -1: no action
+	Type             ContentType // 0: page, 1: attachment
 	LastModifiedDate string
 	MediaType        string // Mime type
 	DifyID           string
-	Keywords         []string
-	StartAt          time.Time
+	//Keywords         Keywords
+	StartAt time.Time
+	Hash    string
 }
+
 type UpdateKeywordsFunc func(key, difyID string) (err error)
 type StatusCheckerFunc func(ctx context.Context, key, id, title, batch string, op Operation) (int, string, Operation, error)
 
@@ -124,7 +177,7 @@ func (bp *BatchPool) worker() {
 	}
 }
 
-func (bp *BatchPool) Add(ctx context.Context, key, id, title, batch string, op Operation) error {
+func (bp *BatchPool) Add(ctx context.Context, key, id, title, batch, segEofTag string, op Operation) error {
 	task := Task{
 		key:   key,
 		id:    id,
@@ -265,8 +318,6 @@ func (bp *BatchPool) monitorBatch(task Task) {
 				log.Printf("[ABORTED] %s - %s Pool shutting down.", bp.ProgressString(task.key), logPrefix)
 			}
 			return
-		default:
-			// No-op: Just keep waiting for the next tick or context cancellation
 		}
 	}
 }

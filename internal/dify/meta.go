@@ -15,7 +15,7 @@ import (
 // Supported field types for metadata
 // Added fields for local folder sync: doc_id, original_path, last_modified, content_hash
 var metaFields = []string{
-	"title", "url", "source_type", "type", "space_key", "download", "id", "last_modified", "last_modified_date", "xxh3", // Confluence fields
+	"title", "url", "source_type", "type", "key", "download", "id", "last_modified", "last_modified_date", "xxh3", "hash",
 }
 
 type MetaField struct {
@@ -254,8 +254,8 @@ func (c *Client) UpdateDocumentMetadata(documentID, source string, params Docume
 	if params.Type != "" {
 		recordToStore.Type = params.Type
 	}
-	if params.SpaceKey != "" {
-		recordToStore.SpaceKey = params.SpaceKey
+	if params.Key != "" {
+		recordToStore.Key = params.Key
 	}
 	// Use the calculated final value for ConfluenceIDs in internal storage
 	recordToStore.IDs = finalConfluenceIDsValue
@@ -265,23 +265,26 @@ func (c *Client) UpdateDocumentMetadata(documentID, source string, params Docume
 	if params.Xxh3 != "" { // Use params.Xxh3 (matches struct field name)
 		recordToStore.Xxh3 = params.Xxh3
 	}
+	if params.Hash != "" { // Use params.Xxh3 (matches struct field name)
+		recordToStore.Hash = params.Hash
+	}
 	// Note: ConfluenceIDToAdd is transient and not stored in the cache record.
 
 	// --- Hash Mapping Update Logic ---
 	// Get the old hash *before* updating the record
-	oldHash := ""
+	oldXxh3 := ""
 	if existingRecord, exists := c.GetDocumentMetadataRecord(documentID); exists {
-		oldHash = existingRecord.Xxh3
+		oldXxh3 = existingRecord.Xxh3
 	}
 
 	// Store the updated/new record in the client's cache
 	c.SetDocumentMetadataRecord(documentID, recordToStore) // recordToStore is already DocumentMetadataRecord type
 
 	// Update hashMapping if the hash has changed and is not empty
-	newHash := recordToStore.Xxh3 // Use the hash from the record we just stored
-	if newHash != "" && newHash != oldHash {
+	newXxh3 := recordToStore.Xxh3 // Use the hash from the record we just stored
+	if newXxh3 != "" && newXxh3 != oldXxh3 {
 		// Add new mapping regardless of whether the old one was removed
-		c.SetHashMapping(newHash, documentID)
+		c.SetHashMapping(newXxh3, documentID)
 	}
 	// --- End Hash Mapping Update Logic ---
 
@@ -297,9 +300,10 @@ func (c *Client) buildApiMetadataPayload(params DocumentMetadataRecord, finalCon
 	c.addMetadataIfValid(&metadataToUpdate, "url", params.URL)
 	c.addMetadataIfValid(&metadataToUpdate, "source_type", source) // Always set source_type for API
 	c.addMetadataIfValid(&metadataToUpdate, "type", params.Type)
-	c.addMetadataIfValid(&metadataToUpdate, "space_key", params.SpaceKey)
+	c.addMetadataIfValid(&metadataToUpdate, "key", params.Key)
 	c.addMetadataIfValid(&metadataToUpdate, "last_modified_date", params.When) // Use params.When
 	c.addMetadataIfValid(&metadataToUpdate, "xxh3", params.Xxh3)               // Use params.Xxh3
+	c.addMetadataIfValid(&metadataToUpdate, "hash", params.Hash)               // Use params.Xxh3
 	if t, err := utils.RFC3339ToUnix(params.When); err == nil {
 		c.addMetadataIfValid(&metadataToUpdate, "last_modified", fmt.Sprintf("%d", t)) // Use params.Xxh3
 	} else {

@@ -33,13 +33,6 @@ func (c *Client) GetBaseURL() string {
 	return c.baseURL
 }
 
-func (c *Client) prepareHeader(req *http.Request) *http.Request {
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	return req
-}
-
 func (c *Client) preparePageQuery(req *http.Request, limit string, start string, expand []string) *http.Request {
 	q := req.URL.Query()
 	if limit != "" {
@@ -53,9 +46,7 @@ func (c *Client) preparePageQuery(req *http.Request, limit string, start string,
 	}
 	req.URL.RawQuery = q.Encode()
 
-	c.prepareHeader(req)
-
-	return req
+	return utils.AddBearerAuthHeader(c.apiKey, req)
 }
 
 func (c *Client) GetSpaceContentsList(spaceKey string) (contents map[string]batchpool.Operation, err error) {

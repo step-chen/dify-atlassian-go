@@ -20,7 +20,7 @@ func (c *Client) CheckBatchStatus(ctx context.Context, key, id, title, batch, so
 		// Proceed with status check if context is not done
 	}
 
-	code, status, err := c.getIndexingStatus(op.DifyID, batch)
+	code, status, err := c.getIndexingStatus(batch)
 	if err != nil {
 		return code, "", op, err // Values will be assigned to statusString, updatedOp, checkErr
 	}
